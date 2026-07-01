@@ -1,0 +1,1199 @@
+:root {
+  color-scheme: light;
+  --ink: #15171c;
+  --muted: #656d78;
+  --line: #dde2ea;
+  --bg: #f6f4ef;
+  --panel: #ffffff;
+  --dark: #1d222b;
+  --gold: #c99a35;
+  --cyan: #0a7585;
+  --red: #b43f32;
+  --green: #2f7d56;
+  --shadow: 0 18px 48px rgba(25, 30, 38, 0.13);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", "PingFang TC", sans-serif;
+  color: var(--ink);
+  background: var(--bg);
+  line-height: 1.55;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px clamp(16px, 4vw, 44px);
+  border-bottom: 1px solid rgba(21, 23, 28, 0.12);
+  background: rgba(246, 244, 239, 0.95);
+  backdrop-filter: blur(16px);
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.brand strong {
+  font-size: 15px;
+  line-height: 1.15;
+}
+
+.brand span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.nav a,
+.nav button,
+.button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border: 1px solid var(--dark);
+  border-radius: 6px;
+  background: var(--dark);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.nav a.secondary,
+.nav button.secondary,
+.button.secondary {
+  background: transparent;
+  color: var(--dark);
+}
+
+.nav button.warn,
+.button.warn {
+  border-color: var(--red);
+  background: var(--red);
+}
+
+.nav button:disabled,
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #ece7dc;
+  color: #404852;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status-dot.live {
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(47, 125, 86, 0.12);
+}
+
+.status-dot.error {
+  background: var(--red);
+  box-shadow: 0 0 0 4px rgba(180, 63, 50, 0.12);
+}
+
+.home {
+  padding: clamp(28px, 6vw, 76px);
+}
+
+.home-grid {
+  max-width: 1160px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(320px, 1.1fr);
+  gap: clamp(24px, 5vw, 64px);
+  align-items: center;
+}
+
+.home h1 {
+  margin: 0 0 16px;
+  max-width: 720px;
+  font-size: clamp(38px, 6vw, 76px);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.lead {
+  max-width: 700px;
+  margin: 0 0 26px;
+  color: #39424e;
+  font-size: clamp(17px, 1.6vw, 22px);
+}
+
+.launch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+}
+
+.launch-card,
+.panel {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 10px 28px rgba(24, 30, 38, 0.06);
+}
+
+.launch-card {
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+
+.launch-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+.launch-card small {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.launch-card h2,
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.launch-card p,
+.panel p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.url-box {
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px dashed #b8b0a3;
+  border-radius: 8px;
+  background: #fffaf0;
+  color: #3b3f46;
+}
+
+.url-box code,
+code {
+  color: #7a3d2e;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95em;
+}
+
+.sign-layout {
+  height: 100dvh;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.signature-area {
+  min-height: 0;
+  padding: clamp(10px, 2vw, 22px);
+  display: grid;
+}
+
+.signature-card {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--panel);
+  border: clamp(8px, 1.35vw, 16px) solid #171b22;
+  border-radius: clamp(18px, 2.4vw, 28px);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.5) inset,
+    var(--shadow),
+    0 24px 70px rgba(12, 15, 20, 0.18);
+  overflow: hidden;
+}
+
+.signature-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: clamp(10px, 1.5vw, 16px);
+  border-bottom: 1px solid var(--line);
+}
+
+.signature-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.signature-header-actions button {
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 1px solid var(--dark);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dark);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.signature-card h1,
+.wall-title h1 {
+  margin: 0;
+  font-size: clamp(23px, 3vw, 38px);
+  line-height: 1.15;
+}
+
+.signature-card header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: clamp(12px, 1.45vw, 14px);
+}
+
+.canvas-wrap {
+  position: relative;
+  min-height: 0;
+  background:
+    linear-gradient(90deg, rgba(21,23,28,0.045) 1px, transparent 1px),
+    linear-gradient(rgba(21,23,28,0.045) 1px, transparent 1px),
+    #fff;
+  background-size: 38px 38px;
+}
+
+#signatureCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.placeholder {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(21, 23, 28, 0.18);
+  font-size: clamp(28px, 8vw, 78px);
+  font-weight: 800;
+}
+
+.signature-actions,
+.control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.signature-actions {
+  padding: 0 clamp(10px, 2vw, 22px) clamp(10px, 2vw, 18px);
+}
+
+.helper-text {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.wall-body {
+  min-height: 100vh;
+  overflow: hidden;
+  background: #10141b;
+  color: #fff;
+}
+
+.wall-stage {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  background:
+    radial-gradient(circle at 20% 78%, rgba(201, 154, 53, 0.24), transparent 26%),
+    radial-gradient(circle at 78% 18%, rgba(10, 117, 133, 0.27), transparent 30%),
+    linear-gradient(135deg, #10141b, #252c38 60%, #121821);
+}
+
+.wall-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px clamp(22px, 4vw, 58px);
+}
+
+.wall-title p {
+  margin: 6px 0 0;
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.wall-canvas {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  isolation: isolate;
+}
+
+.wall-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 54px 54px;
+  mask-image: linear-gradient(180deg, transparent, #000 16%, #000 84%, transparent);
+}
+
+.wall-sweep {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.16), transparent);
+  transform: translateX(-120%);
+  animation: wallSweep 5s ease-in-out infinite;
+  mix-blend-mode: screen;
+}
+
+.wall-signature {
+  position: relative;
+  z-index: 1;
+  width: min(82vw, 1320px);
+  max-height: 58vh;
+  overflow: visible;
+  filter: drop-shadow(0 0 22px rgba(246, 213, 139, 0.52));
+}
+
+.wall-signature path {
+  fill: none;
+  stroke: #f4d38c;
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.wall-signature.draw path {
+  animation: drawSignature 3.2s ease forwards;
+}
+
+.wall-empty {
+  position: relative;
+  z-index: 2;
+  color: rgba(255,255,255,0.38);
+  font-size: clamp(24px, 5vw, 64px);
+  font-weight: 800;
+  text-align: center;
+}
+
+.wall-footer {
+  padding: 18px clamp(22px, 4vw, 58px) 26px;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  color: rgba(255,255,255,0.68);
+  font-size: 14px;
+}
+
+.blackout .wall-canvas,
+.blackout .wall-footer,
+.blackout .wall-top {
+  opacity: 0;
+}
+
+.medical-wall-body {
+  min-height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 24% 85%, rgba(29, 66, 83, 0.44), transparent 30%),
+    radial-gradient(circle at 80% 18%, rgba(44, 89, 76, 0.28), transparent 28%),
+    linear-gradient(135deg, #0f1218, #1b2029 54%, #10151d);
+  color: #fff;
+}
+
+.medical-stage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: clamp(12px, 2.6vw, 42px);
+}
+
+.medical-stage.blackout {
+  background: #000;
+}
+
+.medical-stage.blackout .medical-led {
+  opacity: 0;
+}
+
+.medical-led {
+  position: relative;
+  width: min(96vw, 1720px);
+  aspect-ratio: 2 / 1;
+  --live-x: 50%;
+  --live-y: 50%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  background:
+    radial-gradient(circle at 18% 8%, rgba(98, 240, 218, 0.12), transparent 30%),
+    radial-gradient(circle at 72% 12%, rgba(80, 170, 245, 0.11), transparent 34%),
+    radial-gradient(circle at 50% 108%, rgba(48, 186, 135, 0.14), transparent 34%),
+    linear-gradient(180deg, #071120 0%, #102142 46%, #132c3e 72%, #0a1722 100%);
+  box-shadow:
+    0 38px 90px rgba(0, 0, 0, 0.46),
+    0 0 54px rgba(34, 207, 211, 0.10);
+  isolation: isolate;
+}
+
+.medical-standby {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 1;
+  transition: opacity 420ms ease;
+}
+
+.medical-led.active .medical-standby {
+  opacity: 0.16;
+}
+
+.medical-led::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background:
+    linear-gradient(108deg, transparent 16%, rgba(55, 216, 213, 0.10) 38%, rgba(87, 229, 165, 0.10) 52%, transparent 76%),
+    linear-gradient(rgba(255,255,255,0.020) 1px, transparent 1px);
+  background-size: 160% 100%, 100% 4px;
+  opacity: 0.48;
+  animation: medicalBackplateDrift 14s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.medical-led::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 50%, transparent 52%, rgba(0,0,0,0.25)),
+    linear-gradient(180deg, rgba(255,255,255,0.04), transparent 12%, transparent 88%, rgba(0,0,0,0.18));
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* Ambient aurora ribbons: always-on backdrop layer. */
+.medical-aurora {
+  position: absolute;
+  inset: -10% -4% -8%;
+  z-index: 2;
+  overflow: hidden;
+  opacity: 0.82;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  transition: opacity 500ms ease, filter 500ms ease;
+}
+
+.medical-led.mode-final .medical-aurora {
+  opacity: 1;
+  filter: saturate(1.18) brightness(1.12);
+}
+
+/* Generated aurora video: preferred final-mode backdrop when the file is
+   available; the canvas burst below is the procedural fallback. */
+.medical-aurora-video {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 700ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.medical-led.mode-final.has-aurora-video .medical-aurora-video {
+  opacity: 1;
+}
+
+.medical-led.has-aurora-video .medical-aurora-burst {
+  display: none;
+}
+
+/* Burst aurora: vivid canvas curtains, only while the final signature
+   playback is on the wall. Rendered by medical-wall.html. */
+.medical-aurora-burst {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  transition: opacity 700ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.medical-led.mode-final .medical-aurora-burst {
+  opacity: 1;
+}
+
+.aurora-ribbon {
+  position: absolute;
+  bottom: -28%;
+  width: clamp(170px, 15vw, 280px);
+  height: 118%;
+  border-radius: 999px 999px 40% 40%;
+  opacity: 0.72;
+  filter: blur(16px);
+  transform-origin: 50% 100%;
+  animation:
+    medicalAuroraRise 8.8s ease-in-out infinite,
+    medicalAuroraWave 5.4s ease-in-out infinite alternate;
+}
+
+.aurora-ribbon::after {
+  content: "";
+  position: absolute;
+  inset: 6% 32% 0;
+  border-radius: inherit;
+  background: rgba(228, 255, 249, 0.24);
+  filter: blur(20px);
+  animation: medicalAuroraGlow 4.8s ease-in-out infinite alternate;
+}
+
+.ribbon-1 {
+  left: 8%;
+  background: linear-gradient(0deg, transparent 0%, rgba(35, 216, 205, 0.08) 18%, rgba(102, 241, 208, 0.42) 50%, rgba(207, 255, 236, 0.12) 82%, transparent 100%);
+  animation-delay: -3.5s, -1.2s;
+  transform: rotate(-11deg) scaleY(1.02);
+}
+
+.ribbon-2 {
+  left: 30%;
+  width: clamp(210px, 18vw, 340px);
+  background: linear-gradient(0deg, transparent 0%, rgba(66, 158, 255, 0.08) 20%, rgba(92, 220, 255, 0.36) 52%, rgba(160, 255, 226, 0.18) 84%, transparent 100%);
+  animation-delay: -1.2s, -2.8s;
+  transform: rotate(8deg) scaleY(1.12);
+}
+
+.ribbon-3 {
+  left: 56%;
+  width: clamp(190px, 17vw, 320px);
+  background: linear-gradient(0deg, transparent 0%, rgba(72, 242, 166, 0.08) 18%, rgba(93, 244, 181, 0.38) 50%, rgba(106, 207, 255, 0.16) 82%, transparent 100%);
+  animation-delay: -5.1s, -0.7s;
+  transform: rotate(-7deg) scaleY(1.08);
+}
+
+.ribbon-4 {
+  left: 76%;
+  width: clamp(150px, 13vw, 260px);
+  background: linear-gradient(0deg, transparent 0%, rgba(73, 194, 255, 0.06) 18%, rgba(81, 210, 255, 0.26) 48%, rgba(203, 255, 242, 0.11) 80%, transparent 100%);
+  animation-delay: -7.4s, -3.1s;
+  transform: rotate(13deg) scaleY(0.96);
+}
+
+.medical-arrival {
+  position: absolute;
+  z-index: 6;
+  inset: 8% 7% 20%;
+  opacity: 0;
+  transform: translateY(16%) scale(0.82);
+  transform-origin: 50% 82%;
+  pointer-events: none;
+}
+
+/* Enter / exit animations are applied inline by medical-wall.html so the
+   blur-out can wait until the stroke playback has actually finished. */
+
+.medical-signature {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter:
+    drop-shadow(0 0 12px rgba(184, 248, 238, 0.62))
+    drop-shadow(0 0 30px rgba(42, 209, 224, 0.26));
+}
+
+.medical-live-contact {
+  position: absolute;
+  left: var(--live-x);
+  top: var(--live-y);
+  z-index: 7;
+  width: clamp(34px, 4.6vw, 76px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 255, 255, 0.95) 0 9%, rgba(218, 255, 249, 0.70) 10% 22%, rgba(83, 241, 222, 0.28) 23% 48%, transparent 70%);
+  filter:
+    blur(0.2px)
+    drop-shadow(0 0 14px rgba(218, 255, 250, 0.78))
+    drop-shadow(0 0 34px rgba(52, 229, 219, 0.48));
+  mix-blend-mode: screen;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.medical-live-contact::after {
+  content: "";
+  position: absolute;
+  inset: -36%;
+  border: 1px solid rgba(201, 255, 248, 0.42);
+  border-radius: 50%;
+  animation: liveContactPulse 760ms ease-out infinite;
+}
+
+.medical-live-contact[hidden] {
+  display: none;
+}
+
+.medical-signature path {
+  fill: none;
+  stroke: #e8fff9;
+  stroke-width: 8.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Final-mode stroke paths get their dash animation inline, one path per
+   stroke in writing order, built by buildStrokePlayback() in medical-wall. */
+
+.medical-current-label {
+  position: absolute;
+  left: 50%;
+  bottom: 2%;
+  z-index: 4;
+  min-width: 160px;
+  transform: translateX(-50%);
+  color: rgba(232, 255, 252, 0.68);
+  font-size: clamp(15px, 1.7vw, 24px);
+  font-weight: 800;
+  text-align: center;
+  text-shadow: 0 0 16px rgba(16, 176, 184, 0.45);
+}
+
+.medical-led.mode-live .medical-arrival,
+.medical-led.mode-final .medical-arrival {
+  inset: 7% 6% 18%;
+}
+
+.medical-led.mode-live .medical-arrival {
+  inset: 0;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  animation: none;
+}
+
+.medical-led.mode-live::before {
+  opacity: 0.66;
+  background:
+    linear-gradient(108deg, transparent 16%, rgba(55, 216, 213, 0.14) 38%, rgba(87, 229, 165, 0.10) 52%, transparent 76%),
+    linear-gradient(rgba(255,255,255,0.030) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.024) 1px, transparent 1px);
+  background-size: 160% 100%, 100% 4px, 5px 100%;
+}
+
+.medical-led.mode-live .medical-signature path {
+  animation: none;
+  stroke-dasharray: none;
+  stroke-dashoffset: 0;
+  stroke-width: 9.8;
+  filter:
+    drop-shadow(0 0 2px rgba(255, 255, 255, 0.95))
+    drop-shadow(0 0 18px rgba(207, 255, 248, 0.74))
+    drop-shadow(0 0 46px rgba(44, 227, 218, 0.46));
+}
+
+.medical-led.mode-live .medical-current-label,
+.medical-led.mode-final .medical-current-label {
+  display: none;
+}
+
+.medical-retained {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: 3%;
+  z-index: 5;
+  height: clamp(196px, 24vw, 300px);
+  display: grid;
+  gap: 12px;
+  align-content: center;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+}
+
+.medical-marquee-lane {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.medical-marquee-track {
+  width: max-content;
+  display: flex;
+  gap: 14px;
+  animation: medicalMarquee 32s linear infinite;
+  animation-delay: var(--marquee-delay-a, 0ms);
+  will-change: transform;
+}
+
+.medical-marquee-lane.lane-2 .medical-marquee-track {
+  animation-duration: 39s;
+  animation-delay: var(--marquee-delay-b, 0ms);
+  animation-direction: reverse;
+}
+
+.medical-retained-card {
+  flex: 0 0 clamp(300px, 24vw, 430px);
+  min-width: 0;
+  height: clamp(86px, 10vw, 126px);
+  display: grid;
+  grid-template-rows: 24px 1fr;
+  padding: 9px 12px;
+  border: 1px solid rgba(210, 249, 244, 0.20);
+  border-radius: 6px;
+  background: rgba(5, 13, 19, 0.48);
+  backdrop-filter: blur(12px);
+}
+
+.medical-retained-card span {
+  overflow: hidden;
+  color: rgba(230, 255, 252, 0.70);
+  font-size: clamp(13px, 1.1vw, 16px);
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.medical-retained-card svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: block;
+  overflow: visible;
+}
+
+.medical-retained-card path {
+  fill: none;
+  stroke: rgba(226, 255, 250, 0.90);
+  stroke-width: 13;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.medical-led.mode-live .medical-retained,
+.medical-led.mode-final .medical-retained,
+.medical-led.mode-blackout .medical-retained {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6%);
+}
+
+.medical-led.mode-marquee .medical-retained {
+  inset: 4% -5% 4%;
+  height: auto;
+  gap: clamp(14px, 2.1vw, 28px);
+  align-content: space-evenly;
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+.medical-led.mode-marquee .medical-marquee-track {
+  gap: clamp(18px, 2vw, 34px);
+  animation-duration: 40s;
+}
+
+.medical-led.mode-marquee .medical-marquee-lane.lane-2 .medical-marquee-track {
+  animation-duration: 48s;
+}
+
+.medical-led.mode-marquee .medical-marquee-lane.lane-3 .medical-marquee-track {
+  animation-duration: 44s;
+  animation-direction: reverse;
+}
+
+.medical-led.mode-marquee .medical-marquee-lane.lane-4 .medical-marquee-track {
+  animation-duration: 52s;
+}
+
+.medical-led.mode-marquee .medical-retained-card {
+  flex-basis: clamp(420px, 34vw, 650px);
+  height: clamp(118px, 12.2vw, 178px);
+  grid-template-rows: clamp(28px, 2.6vw, 40px) 1fr;
+  padding: clamp(12px, 1.4vw, 20px) clamp(16px, 1.8vw, 26px);
+}
+
+.medical-led.mode-marquee .medical-retained-card span {
+  font-size: clamp(18px, 1.7vw, 26px);
+}
+
+.medical-led.mode-marquee .medical-retained-card path {
+  stroke-width: 15;
+}
+
+.medical-status {
+  position: fixed;
+  right: 18px;
+  bottom: 14px;
+  z-index: 10;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.36);
+  color: rgba(255,255,255,0.68);
+  font-size: 12px;
+  backdrop-filter: blur(10px);
+  display: none;
+}
+
+.control-main {
+  padding: clamp(18px, 4vw, 44px);
+}
+
+.control-grid {
+  max-width: 1160px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 18px;
+}
+
+.control-actions {
+  justify-content: flex-start;
+  margin-top: 18px;
+}
+
+.state-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.state-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.state-row span {
+  color: var(--muted);
+}
+
+.preview-box {
+  min-height: 320px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed #b8b0a3;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
+.preview-box svg {
+  width: 92%;
+  max-height: 280px;
+}
+
+.preview-box path {
+  fill: none;
+  stroke: var(--dark);
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.signature-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.signature-list-item {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.8fr) 70px minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.signature-list-item .signature-remove {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.signature-list-item strong {
+  font-size: 14px;
+}
+
+.signature-list-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.signature-list-item svg {
+  width: 100%;
+  height: 48px;
+}
+
+.signature-list-item path {
+  fill: none;
+  stroke: var(--dark);
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.toast {
+  min-height: 22px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+@keyframes medicalSignatureEnter {
+  0% {
+    opacity: 0;
+    transform: translateY(22%) scale(0.72);
+    filter: blur(6px);
+  }
+  70% {
+    opacity: 1;
+    transform: translateY(-1.5%) scale(1.03);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes medicalSignatureExit {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8%) scale(0.92);
+    filter: blur(5px);
+  }
+}
+
+@keyframes medicalAuroraRise {
+  0%, 100% {
+    opacity: 0.48;
+    translate: 0 5%;
+  }
+  42% {
+    opacity: 0.82;
+    translate: 0 -4%;
+  }
+  72% {
+    opacity: 0.64;
+    translate: 0 -1%;
+  }
+}
+
+@keyframes medicalAuroraWave {
+  from { scale: 0.88 1; rotate: -2deg; }
+  to { scale: 1.15 1.06; rotate: 3deg; }
+}
+
+@keyframes medicalAuroraGlow {
+  from { opacity: 0.22; }
+  to { opacity: 0.54; }
+}
+
+@keyframes liveContactPulse {
+  from {
+    opacity: 0.75;
+    transform: scale(0.45);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.35);
+  }
+}
+
+@keyframes medicalMarquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@keyframes wallSweep {
+  0% { transform: translateX(-130%); opacity: 0; }
+  32% { opacity: 0.5; }
+  100% { transform: translateX(130%); opacity: 0; }
+}
+
+@keyframes medicalBackplateDrift {
+  0% { background-position: 0% 50%, 0 0; filter: saturate(0.88) brightness(0.86); }
+  100% { background-position: 100% 50%, 0 0; filter: saturate(1.05) brightness(1); }
+}
+
+@keyframes drawSignature {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes auroraDrift {
+  0%, 100% { transform: translateX(-2%) translateY(0) rotate(-2deg) scaleY(0.92); }
+  50% { transform: translateX(3%) translateY(-8%) rotate(2deg) scaleY(1.12); }
+}
+
+@keyframes parPulse {
+  0%, 100% { opacity: 0.38; }
+  48% { opacity: 0.84; }
+}
+
+@media (max-width: 900px) {
+  .home-grid,
+  .launch-grid,
+  .control-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar,
+  .signature-card header,
+  .wall-top,
+  .wall-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .medical-retained {
+    height: clamp(156px, 34vw, 240px);
+  }
+
+  .medical-retained-card {
+    flex-basis: clamp(220px, 58vw, 340px);
+    height: clamp(74px, 18vw, 104px);
+  }
+}
+
+@media (max-width: 620px) {
+  .nav {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .nav a,
+  .nav button,
+  .button {
+    flex: 1 1 auto;
+  }
+
+  .signature-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.light-config {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid rgba(21, 23, 28, 0.12);
+  border-radius: 12px;
+  background: rgba(21, 23, 28, 0.03);
+}
+
+.light-fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.light-fieldset[hidden] {
+  display: none;
+}
+
+.light-field {
+  display: grid;
+  gap: 4px;
+  font-size: 0.82rem;
+}
+
+.light-field span {
+  color: rgba(21, 23, 28, 0.62);
+  font-weight: 600;
+}
+
+.light-field input,
+.light-field select {
+  padding: 8px 10px;
+  border: 1px solid rgba(21, 23, 28, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+}
+
+.light-field input:focus,
+.light-field select:focus {
+  outline: 2px solid rgba(21, 23, 28, 0.4);
+  outline-offset: 1px;
+}

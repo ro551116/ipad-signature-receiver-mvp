@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>iPad Signature Receiver MVP</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/">
+        <strong>iPad Signature Receiver MVP</strong>
+        <span>簽名從 iPad 送到電腦牆面的第一版 prototype</span>
+      </a>
+      <nav class="nav" aria-label="頁面導覽">
+        <a href="/sign" class="secondary">iPad 簽名</a>
+        <a href="/wall">電視牆</a>
+        <a href="/control" class="secondary">控制台</a>
+      </nav>
+    </header>
+
+    <main class="home">
+      <div class="home-grid">
+        <section>
+          <h1>先把簽名穩定送到電腦</h1>
+          <p class="lead">這版先驗證最重要的一段：iPad 簽名、電腦接收、牆面即時顯示。TouchDesigner 和燈光先不接，等這段穩定後再往後串。</p>
+          <div class="url-box">
+            <strong>使用方式</strong>
+            <p>電腦和 iPad 連同一個 Wi-Fi。電腦開 <code>/wall</code> 全螢幕，iPad 開 <code>/sign</code> 簽名，工作人員用 <code>/control</code> reset 或 replay。</p>
+          </div>
+        </section>
+
+        <section class="launch-grid" aria-label="啟動頁面">
+          <a class="launch-card" href="/sign">
+            <span>
+              <small>Input</small>
+              <h2>iPad 簽名端</h2>
+              <p>用 Safari 開啟，手指或 Apple Pencil 簽名後送出。</p>
+            </span>
+            <strong>Open /sign</strong>
+          </a>
+          <a class="launch-card" href="/wall">
+            <span>
+              <small>Output</small>
+              <h2>電視牆顯示端</h2>
+              <p>電腦接 HDMI 到電視牆，全螢幕顯示簽名動畫。</p>
+            </span>
+            <strong>Open /wall</strong>
+          </a>
+          <a class="launch-card" href="/medical-wall">
+            <span>
+              <small>Scenario</small>
+              <h2>醫師迎賓簽名牆</h2>
+              <p>依 2026-05-25 醫師迎賓空間：待機背板動畫、簽名展示、程式極光、多位醫師簽名保留。</p>
+            </span>
+            <strong>Open /medical-wall</strong>
+          </a>
+          <a class="launch-card" href="/control">
+            <span>
+              <small>Operator</small>
+              <h2>工作人員控制台</h2>
+              <p>Reset、Replay、Blackout、查看目前連線狀態。</p>
+            </span>
+            <strong>Open /control</strong>
+          </a>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>工作人員控制台</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/">
+        <strong>工作人員控制台</strong>
+        <span>Reset、Replay、Blackout、查看目前接收狀態。</span>
+      </a>
+      <div class="status-pill">
+        <span class="status-dot" id="connectionDot"></span>
+        <span id="connectionText">連線中</span>
+      </div>
+    </header>
+
+    <main class="control-main">
+      <div class="control-grid">
+        <section class="panel">
+          <h2>Show Control</h2>
+          <p>正式現場一定要讓工作人員能手動接管。這裡先放最基本的 cue。</p>
+          <div class="control-actions nav">
+            <button type="button" id="resetButton">Reset</button>
+            <button type="button" class="secondary" id="replayButton">Replay</button>
+            <button type="button" class="warn" id="blackoutButton">Blackout</button>
+            <button type="button" class="secondary" id="idleButton">Idle</button>
+            <button type="button" class="secondary" id="clearAllButton">Clear All Signatures</button>
+          </div>
+          <p class="toast" id="toast"></p>
+
+          <div class="state-list">
+            <div class="state-row"><span>Status</span><strong id="stateStatus">-</strong></div>
+            <div class="state-row"><span>Sequence</span><strong id="stateSequence">-</strong></div>
+            <div class="state-row"><span>Last Updated</span><strong id="stateUpdated">-</strong></div>
+            <div class="state-row"><span>Connected Displays</span><strong id="stateClients">-</strong></div>
+            <div class="state-row"><span>Stored Signatures</span><strong id="stateSignatureCount">-</strong></div>
+            <div class="state-row"><span>Auto Return</span><strong id="stateDuration">-</strong></div>
+            <div class="state-row"><span>Has Replay</span><strong id="stateReplay">-</strong></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Lighting</h2>
+          <p>簽名事件會自動觸發燈光 cue（live / final / idle / blackout）。選擇訊號種類後按「套用設定」，設定會存檔、重啟後保留。</p>
+
+          <div class="light-config">
+            <label class="light-field">
+              <span>訊號種類</span>
+              <select id="lightMode">
+                <option value="log">Log（無輸出，只印 console）</option>
+                <option value="osc">OSC 觸發（送 cue 給控台 / TouchDesigner）</option>
+                <option value="artnet-trigger">Art-Net 觸發（cue 寫入觸發 channel）</option>
+                <option value="artnet-stream">Art-Net 效果串流（內建極光直推 PAR）</option>
+              </select>
+            </label>
+
+            <div class="light-fieldset" data-mode-fields="osc">
+              <label class="light-field"><span>OSC Host</span><input id="oscHost" placeholder="127.0.0.1"></label>
+              <label class="light-field"><span>OSC Port</span><input id="oscPort" type="number" min="1" max="65535"></label>
+              <label class="light-field"><span>OSC Address</span><input id="oscAddress" placeholder="/signature-wall/cue"></label>
+            </div>
+
+            <div class="light-fieldset" data-mode-fields="artnet-trigger artnet-stream">
+              <label class="light-field"><span>Art-Net Host</span><input id="artnetHost" placeholder="255.255.255.255"></label>
+              <label class="light-field"><span>Art-Net Port</span><input id="artnetPort" type="number" min="1" max="65535"></label>
+              <label class="light-field"><span>Universe</span><input id="artnetUniverse" type="number" min="0" max="32767"></label>
+            </div>
+
+            <div class="light-fieldset" data-mode-fields="artnet-trigger">
+              <label class="light-field"><span>觸發 Channel</span><input id="triggerChannel" type="number" min="1" max="512"></label>
+              <label class="light-field"><span>Idle 值</span><input id="triggerIdle" type="number" min="0" max="255"></label>
+              <label class="light-field"><span>Live 值</span><input id="triggerLive" type="number" min="0" max="255"></label>
+              <label class="light-field"><span>Final 值</span><input id="triggerFinal" type="number" min="0" max="255"></label>
+              <label class="light-field"><span>Blackout 值</span><input id="triggerBlackout" type="number" min="0" max="255"></label>
+            </div>
+
+            <div class="light-fieldset" data-mode-fields="artnet-stream">
+              <label class="light-field"><span>PAR 數量</span><input id="parCount" type="number" min="1" max="64"></label>
+              <label class="light-field"><span>起始 Channel</span><input id="dmxStart" type="number" min="1" max="512"></label>
+              <label class="light-field">
+                <span>Fixture Profile</span>
+                <select id="fixtureProfile">
+                  <option value="rgb">RGB（3ch）</option>
+                  <option value="drgb">Dimmer + RGB（4ch）</option>
+                </select>
+              </label>
+              <label class="light-field"><span>FPS</span><input id="streamFps" type="number" min="10" max="44"></label>
+            </div>
+
+            <div class="control-actions nav">
+              <button type="button" id="applyLightConfig">套用設定</button>
+            </div>
+          </div>
+
+          <div class="control-actions nav">
+            <button type="button" class="secondary" data-light-cue="live">Test Live</button>
+            <button type="button" data-light-cue="final">Test Final</button>
+            <button type="button" class="secondary" data-light-cue="idle">Test Idle</button>
+            <button type="button" class="warn" data-light-cue="blackout">Test Blackout</button>
+          </div>
+          <p class="toast" id="lightToast"></p>
+          <div class="state-list">
+            <div class="state-row"><span>Signal Mode</span><strong id="lightModeText">-</strong></div>
+            <div class="state-row"><span>Current Cue</span><strong id="lightCue">-</strong></div>
+            <div class="state-row"><span>Target</span><strong id="lightTarget">-</strong></div>
+            <div class="state-row"><span>Packets Sent</span><strong id="lightPackets">-</strong></div>
+            <div class="state-row"><span>Last Error</span><strong id="lightError">-</strong></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Signature Preview</h2>
+          <p>這裡顯示目前 server 保存的簽名。電視牆端會用同一份資料重畫。</p>
+          <div class="preview-box">
+            <span id="previewEmpty">No signature</span>
+            <svg id="previewSvg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+              <path id="previewPath"></path>
+            </svg>
+          </div>
+          <div class="signature-list" id="signatureList" aria-label="保留簽名列表"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { connectEvents, controlHeaders, formatTime, postCue, setDot, signatureToPath } from "/assets/shared.js";
+
+    const connectionDot = document.querySelector("#connectionDot");
+    const connectionText = document.querySelector("#connectionText");
+    const toast = document.querySelector("#toast");
+    const stateStatus = document.querySelector("#stateStatus");
+    const stateSequence = document.querySelector("#stateSequence");
+    const stateUpdated = document.querySelector("#stateUpdated");
+    const stateClients = document.querySelector("#stateClients");
+    const stateSignatureCount = document.querySelector("#stateSignatureCount");
+    const stateDuration = document.querySelector("#stateDuration");
+    const stateReplay = document.querySelector("#stateReplay");
+    const lightToast = document.querySelector("#lightToast");
+    const lightModeText = document.querySelector("#lightModeText");
+    const lightCue = document.querySelector("#lightCue");
+    const lightTarget = document.querySelector("#lightTarget");
+    const lightPackets = document.querySelector("#lightPackets");
+    const lightError = document.querySelector("#lightError");
+    const lightModeSelect = document.querySelector("#lightMode");
+    let configDirty = false;
+    const previewEmpty = document.querySelector("#previewEmpty");
+    const previewSvg = document.querySelector("#previewSvg");
+    const previewPath = document.querySelector("#previewPath");
+    const signatureList = document.querySelector("#signatureList");
+
+    const cueMap = {
+      resetButton: "/api/cue/reset",
+      replayButton: "/api/cue/replay",
+      blackoutButton: "/api/cue/blackout",
+      idleButton: "/api/cue/idle",
+      clearAllButton: "/api/cue/clear-signatures"
+    };
+
+    const confirmMap = {
+      clearAllButton: "確定要清空「全部」保留簽名？此操作會立刻覆寫存檔，無法復原。",
+      blackoutButton: "確定要把牆面切到 Blackout？"
+    };
+
+    for (const [buttonId, endpoint] of Object.entries(cueMap)) {
+      document.querySelector(`#${buttonId}`).addEventListener("click", async () => {
+        if (confirmMap[buttonId] && !confirm(confirmMap[buttonId])) return;
+        try {
+          const payload = await postCue(endpoint, controlHeaders());
+          renderState(payload.state);
+          toast.textContent = `Sent ${endpoint}`;
+        } catch (error) {
+          toast.textContent = error.message;
+        }
+      });
+    }
+
+    for (const button of document.querySelectorAll("[data-light-cue]")) {
+      button.addEventListener("click", async () => {
+        try {
+          const response = await fetch("/api/lighting/cue", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...controlHeaders() },
+            body: JSON.stringify({ cue: button.dataset.lightCue })
+          });
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || `request failed: ${response.status}`);
+          renderLighting(payload.lighting);
+          lightToast.textContent = `Sent lighting cue: ${button.dataset.lightCue}`;
+        } catch (error) {
+          lightToast.textContent = error.message;
+        }
+      });
+    }
+
+    const modeLabels = {
+      "log": "Log（無輸出）",
+      "osc": "OSC 觸發",
+      "artnet-trigger": "Art-Net 觸發",
+      "artnet-stream": "Art-Net 效果串流"
+    };
+
+    function syncModeFields() {
+      const mode = lightModeSelect.value;
+      for (const fieldset of document.querySelectorAll("[data-mode-fields]")) {
+        fieldset.hidden = !fieldset.dataset.modeFields.split(" ").includes(mode);
+      }
+    }
+    lightModeSelect.addEventListener("change", () => {
+      configDirty = true;
+      syncModeFields();
+    });
+    for (const input of document.querySelectorAll(".light-config input, .light-config select")) {
+      input.addEventListener("input", () => { configDirty = true; });
+    }
+
+    function fillConfigForm(lighting) {
+      // Don't clobber the form while the operator is editing.
+      if (configDirty || !lighting?.config) return;
+      const { osc, artnet } = lighting.config;
+      lightModeSelect.value = lighting.mode;
+      document.querySelector("#oscHost").value = osc.host;
+      document.querySelector("#oscPort").value = osc.port;
+      document.querySelector("#oscAddress").value = osc.address;
+      document.querySelector("#artnetHost").value = artnet.host;
+      document.querySelector("#artnetPort").value = artnet.port;
+      document.querySelector("#artnetUniverse").value = artnet.universe;
+      document.querySelector("#triggerChannel").value = artnet.triggerChannel;
+      document.querySelector("#triggerIdle").value = artnet.triggerValues.idle;
+      document.querySelector("#triggerLive").value = artnet.triggerValues.live;
+      document.querySelector("#triggerFinal").value = artnet.triggerValues.final;
+      document.querySelector("#triggerBlackout").value = artnet.triggerValues.blackout;
+      document.querySelector("#parCount").value = artnet.parCount;
+      document.querySelector("#dmxStart").value = artnet.dmxStart;
+      document.querySelector("#fixtureProfile").value = artnet.profile;
+      document.querySelector("#streamFps").value = artnet.fps;
+      syncModeFields();
+    }
+
+    // Empty inputs are skipped instead of becoming Number("") === 0, which
+    // would get clamped to a surprising minimum on the server.
+    function numOrUndef(selector) {
+      const value = document.querySelector(selector).value.trim();
+      return value === "" ? undefined : Number(value);
+    }
+
+    function strOrUndef(selector) {
+      const value = document.querySelector(selector).value.trim();
+      return value === "" ? undefined : value;
+    }
+
+    document.querySelector("#applyLightConfig").addEventListener("click", async () => {
+      const patch = {
+        mode: lightModeSelect.value,
+        osc: {
+          host: strOrUndef("#oscHost"),
+          port: numOrUndef("#oscPort"),
+          address: strOrUndef("#oscAddress")
+        },
+        artnet: {
+          host: strOrUndef("#artnetHost"),
+          port: numOrUndef("#artnetPort"),
+          universe: numOrUndef("#artnetUniverse"),
+          triggerChannel: numOrUndef("#triggerChannel"),
+          triggerValues: {
+            idle: numOrUndef("#triggerIdle"),
+            live: numOrUndef("#triggerLive"),
+            final: numOrUndef("#triggerFinal"),
+            blackout: numOrUndef("#triggerBlackout")
+          },
+          parCount: numOrUndef("#parCount"),
+          dmxStart: numOrUndef("#dmxStart"),
+          profile: document.querySelector("#fixtureProfile").value,
+          fps: numOrUndef("#streamFps")
+        }
+      };
+      try {
+        const response = await fetch("/api/lighting/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...controlHeaders() },
+          body: JSON.stringify(patch)
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `request failed: ${response.status}`);
+        configDirty = false;
+        renderLighting(payload.lighting);
+        fillConfigForm(payload.lighting);
+        lightToast.textContent = `已套用：${modeLabels[payload.lighting.mode] || payload.lighting.mode}`;
+      } catch (error) {
+        lightToast.textContent = error.message;
+      }
+    });
+
+    function renderLighting(lighting) {
+      if (!lighting) return;
+      lightModeText.textContent = modeLabels[lighting.mode] || lighting.mode;
+      lightCue.textContent = lighting.currentCue || "-";
+      const { osc, artnet } = lighting.config || {};
+      if (lighting.mode === "osc" && osc) {
+        lightTarget.textContent = `${osc.host}:${osc.port} ${osc.address}`;
+      } else if (lighting.mode === "artnet-trigger" && artnet) {
+        lightTarget.textContent = `${artnet.host}:${artnet.port} U${artnet.universe} ch${artnet.triggerChannel}`;
+      } else if (lighting.mode === "artnet-stream" && artnet) {
+        lightTarget.textContent = `${artnet.host}:${artnet.port} U${artnet.universe} (${artnet.parCount}x ${artnet.profile} @ ${artnet.fps}fps)`;
+      } else {
+        lightTarget.textContent = "console log";
+      }
+      lightPackets.textContent = String(lighting.packetsSent ?? 0);
+      lightError.textContent = lighting.lastError || "-";
+      fillConfigForm(lighting);
+    }
+
+    function renderState(state) {
+      if (!state) return;
+      renderLighting(state.lighting);
+      stateStatus.textContent = state.status || "-";
+      stateSequence.textContent = String(state.sequence ?? "-");
+      stateUpdated.textContent = formatTime(state.lastUpdated);
+      stateClients.textContent = String(state.connectedDisplays ?? "-");
+      stateSignatureCount.textContent = String(state.signatureCount ?? state.signatures?.length ?? 0);
+      stateDuration.textContent = state.displayDurationMs ? `${(state.displayDurationMs / 1000).toFixed(1)}s` : "-";
+      stateReplay.textContent = state.hasLastSignature ? "Yes" : "No";
+      renderSignatureList(state.signatures || []);
+
+      const signature = state.currentSignature;
+      if (!signature) {
+        previewPath.removeAttribute("d");
+        previewSvg.style.display = "none";
+        previewEmpty.style.display = "block";
+        return;
+      }
+
+      previewPath.setAttribute("d", signatureToPath(signature));
+      previewSvg.style.display = "block";
+      previewEmpty.style.display = "none";
+    }
+
+    function renderSignatureList(signatures) {
+      signatureList.replaceChildren();
+      if (signatures.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "helper-text";
+        empty.textContent = "尚未保留簽名。";
+        signatureList.append(empty);
+        return;
+      }
+
+      for (const signature of signatures.slice().reverse()) {
+        const item = document.createElement("article");
+        item.className = "signature-list-item";
+
+        const label = document.createElement("strong");
+        label.textContent = signature.meta?.doctorName || signature.id;
+
+        const time = document.createElement("span");
+        time.textContent = formatTime(signature.createdAt);
+
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("viewBox", "0 0 1000 500");
+        svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", signatureToPath(signature));
+        svg.append(path);
+
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.className = "warn signature-remove";
+        removeButton.textContent = "刪除";
+        removeButton.addEventListener("click", async () => {
+          if (!confirm(`刪除「${signature.meta?.doctorName || signature.id}」的簽名？`)) return;
+          try {
+            const response = await fetch(`/api/signatures/${encodeURIComponent(signature.id)}`, { method: "DELETE", headers: controlHeaders() });
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.error || `request failed: ${response.status}`);
+            renderState(payload.state);
+            toast.textContent = "已刪除簽名";
+          } catch (error) {
+            toast.textContent = error.message;
+          }
+        });
+
+        item.append(label, time, svg, removeButton);
+        signatureList.append(item);
+      }
+    }
+
+    async function loadState() {
+      const response = await fetch("/api/state");
+      renderState(await response.json());
+    }
+
+    connectEvents({
+      connection(connected) {
+        setDot(connectionDot, connected);
+        connectionText.textContent = connected ? "已連線" : "連線中斷";
+      },
+      state: renderState,
+      "signature:submitted": renderState,
+      "signature:removed": renderState,
+      "lighting:config": renderState,
+      "cue:reset": renderState,
+      "cue:idle": renderState,
+      "cue:auto-idle": renderState,
+      "cue:blackout": renderState,
+      "cue:clear-signatures": renderState
+    });
+
+    loadState();
+  </script>
+</body>
+</html>

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>電視牆顯示端</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body class="wall-body">
+  <main class="wall-stage" id="wallStage">
+    <header class="wall-top">
+      <div class="wall-title">
+        <h1>Signature Wall</h1>
+        <p id="wallMessage">等待 iPad 簽名送入</p>
+      </div>
+      <div class="status-pill">
+        <span class="status-dot" id="connectionDot"></span>
+        <span id="connectionText">連線中</span>
+      </div>
+    </header>
+
+    <section class="wall-canvas" aria-label="簽名顯示區">
+      <div class="wall-grid"></div>
+      <div class="wall-sweep"></div>
+      <div class="wall-empty" id="emptyState">WAITING FOR SIGNATURE</div>
+      <svg class="wall-signature" id="signatureSvg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet" aria-label="收到的簽名">
+        <path id="signaturePath"></path>
+      </svg>
+    </section>
+
+    <footer class="wall-footer">
+      <span id="signatureMeta">No signature loaded</span>
+      <span>Tip: press F11 / full screen before connecting to LED wall</span>
+    </footer>
+  </main>
+
+  <script type="module">
+    import { connectEvents, formatTime, setDot, signatureToPath } from "/assets/shared.js";
+
+    const wallStage = document.querySelector("#wallStage");
+    const wallMessage = document.querySelector("#wallMessage");
+    const emptyState = document.querySelector("#emptyState");
+    const signaturePath = document.querySelector("#signaturePath");
+    const signatureSvg = document.querySelector("#signatureSvg");
+    const signatureMeta = document.querySelector("#signatureMeta");
+    const connectionDot = document.querySelector("#connectionDot");
+    const connectionText = document.querySelector("#connectionText");
+
+    function renderSignature(state) {
+      const signature = state?.currentSignature;
+      if (!signature) {
+        clearSignature(state?.status || "idle");
+        return;
+      }
+      wallStage.classList.remove("blackout");
+      const d = signatureToPath(signature);
+      signaturePath.setAttribute("d", d);
+      signatureSvg.classList.remove("draw");
+      const length = Math.ceil(signaturePath.getTotalLength() || 2000);
+      signaturePath.style.strokeDasharray = String(length);
+      signaturePath.style.strokeDashoffset = String(length);
+      requestAnimationFrame(() => signatureSvg.classList.add("draw"));
+      emptyState.style.display = "none";
+      wallMessage.textContent = state.status === "replay" ? "重播上一筆簽名" : "簽名已接收，動畫播放中";
+      signatureMeta.textContent = `${signature.id} / ${formatTime(signature.createdAt)} / sequence ${state.sequence}`;
+    }
+
+    function clearSignature(nextStatus = "idle") {
+      signaturePath.removeAttribute("d");
+      signatureSvg.classList.remove("draw");
+      emptyState.style.display = nextStatus === "blackout" ? "none" : "block";
+      wallStage.classList.toggle("blackout", nextStatus === "blackout");
+      wallMessage.textContent = nextStatus === "blackout" ? "Blackout" : "等待 iPad 簽名送入";
+      signatureMeta.textContent = "No signature loaded";
+    }
+
+    connectEvents({
+      connection(connected) {
+        setDot(connectionDot, connected);
+        connectionText.textContent = connected ? "已連線" : "連線中斷";
+      },
+      state: renderSignature,
+      "signature:submitted": renderSignature,
+      "cue:reset": (state) => clearSignature(state?.status),
+      "cue:idle": (state) => clearSignature(state?.status),
+      "cue:blackout": (state) => clearSignature(state?.status)
+    });
+  </script>
+</body>
+</html>

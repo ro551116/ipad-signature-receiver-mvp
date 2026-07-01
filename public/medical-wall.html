@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>醫師迎賓簽名牆</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body class="medical-wall-body">
+  <main class="medical-stage" id="medicalStage" aria-label="醫師迎賓 LED 牆顯示端">
+    <section class="medical-led" id="medicalLed">
+      <div class="medical-standby" id="standbyLayer" aria-hidden="true"></div>
+      <div class="medical-aurora" aria-hidden="true">
+        <span class="aurora-ribbon ribbon-1"></span>
+        <span class="aurora-ribbon ribbon-2"></span>
+        <span class="aurora-ribbon ribbon-3"></span>
+        <span class="aurora-ribbon ribbon-4"></span>
+      </div>
+      <video class="medical-aurora-video" id="auroraVideo" src="/assets/aurora-final.mp4" muted loop playsinline preload="auto" aria-hidden="true"></video>
+      <canvas class="medical-aurora-burst" id="auroraBurst" aria-hidden="true"></canvas>
+      <div class="medical-arrival" id="arrivalLayer" aria-live="polite">
+        <svg class="medical-signature" id="signatureSvg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet" aria-label="醫師簽名">
+          <path id="signaturePath"></path>
+          <g id="strokeGroup"></g>
+        </svg>
+        <div class="medical-live-contact" id="liveContact" aria-hidden="true"></div>
+        <div class="medical-current-label" id="currentLabel"></div>
+      </div>
+      <div class="medical-retained" id="retainedList" aria-label="已保留簽名"></div>
+    </section>
+    <div class="medical-status" id="statusText">standby / backplate animation</div>
+  </main>
+
+  <script type="module">
+    import { connectEvents, formatTime, signatureToPath, signatureToStrokePaths } from "/assets/shared.js";
+
+    const medicalStage = document.querySelector("#medicalStage");
+    const medicalLed = document.querySelector("#medicalLed");
+    const arrivalLayer = document.querySelector("#arrivalLayer");
+    const signaturePath = document.querySelector("#signaturePath");
+    const strokeGroup = document.querySelector("#strokeGroup");
+    const liveContact = document.querySelector("#liveContact");
+    const currentLabel = document.querySelector("#currentLabel");
+    const retainedList = document.querySelector("#retainedList");
+    const statusText = document.querySelector("#statusText");
+    const marqueeDurations = [32000, 39000];
+    let currentMode = "";
+
+    function renderScene(state) {
+      const liveSignature = state?.liveSignature;
+      const signature = state?.currentSignature;
+      syncMarqueeToClock();
+      medicalStage.classList.remove("blackout");
+
+      if (liveSignature) {
+        renderRetained(state?.signatures || [], liveSignature.id, true);
+        renderLiveSignature(liveSignature, state);
+        return;
+      }
+
+      if (signature) {
+        renderRetained(state?.signatures || [], signature.id, false);
+        renderFinalSignature(signature, state);
+        return;
+      }
+
+      renderRetained(state?.signatures || [], "", true);
+      clearSignature(state?.status || "idle");
+    }
+
+    function renderLiveSignature(signature, state) {
+      strokeGroup.replaceChildren();
+      arrivalLayer.style.animation = "";
+      stopAuroraFx();
+      const d = signatureToPath(signature);
+      signaturePath.setAttribute("d", d);
+      signaturePath.style.strokeDasharray = "";
+      signaturePath.style.strokeDashoffset = "";
+      medicalLed.style.removeProperty("--signature-sync-delay");
+      medicalLed.style.removeProperty("--signature-cycle-ms");
+      medicalLed.style.removeProperty("--signature-draw-ms");
+      setLiveContact(signature);
+      setMode("live");
+
+      currentLabel.textContent = "";
+      statusText.textContent = `${state.status} / ${signature.meta?.doctorName || signature.id} / ${formatTime(signature.createdAt)}`;
+
+      requestAnimationFrame(() => {
+        medicalLed.classList.add("active");
+      });
+    }
+
+    function renderFinalSignature(signature, state) {
+      signaturePath.removeAttribute("d");
+      clearLiveContact();
+      const sync = syncSignatureAnimation(state, signature);
+      const drawTotalMs = buildStrokePlayback(signature, sync);
+      applyArrivalCycle(state, sync, drawTotalMs);
+      startAuroraFx(sync.elapsedMs);
+      setMode("final", true);
+
+      currentLabel.textContent = "";
+      statusText.textContent = `${state.status} / ${signature.meta?.doctorName || signature.id} / ${formatTime(signature.createdAt)}`;
+
+      requestAnimationFrame(() => {
+        medicalLed.classList.add("active");
+        arrivalLayer.classList.add("entering");
+      });
+    }
+
+    // The blur-out must wait until the whole signature has been drawn:
+    // enter plays immediately, exit is delayed past the stroke playback end.
+    function applyArrivalCycle(state, sync, drawTotalMs) {
+      const displayMs = Number(state?.displayDurationMs || 9500);
+      const exitMs = 950;
+      const holdMs = 400;
+      const exitDelay = Math.max(drawTotalMs + holdMs, displayMs - exitMs - 150) - sync.elapsedMs;
+
+      arrivalLayer.style.animation = "none";
+      void arrivalLayer.offsetWidth; // restart animations on replay
+      arrivalLayer.style.animation =
+        `medicalSignatureEnter 800ms cubic-bezier(0.19, 1, 0.22, 1) ${-sync.elapsedMs}ms forwards, ` +
+        `medicalSignatureExit ${exitMs}ms ease-in ${exitDelay}ms forwards`;
+    }
+
+    function clearSignature(nextStatus = "idle") {
+      signaturePath.removeAttribute("d");
+      strokeGroup.replaceChildren();
+      arrivalLayer.style.animation = "";
+      stopAuroraFx();
+      signaturePath.style.strokeDasharray = "";
+      signaturePath.style.strokeDashoffset = "";
+      medicalLed.style.removeProperty("--signature-sync-delay");
+      medicalLed.style.removeProperty("--signature-cycle-ms");
+      medicalLed.style.removeProperty("--signature-draw-ms");
+      clearLiveContact();
+      setMode(nextStatus === "blackout" ? "blackout" : "marquee");
+      currentLabel.textContent = "";
+      medicalStage.classList.toggle("blackout", nextStatus === "blackout");
+      statusText.textContent = nextStatus === "blackout" ? "blackout" : "standby / backplate animation";
+    }
+
+    function setMode(mode, force = false) {
+      if (!force && currentMode === mode) return;
+      currentMode = mode;
+      medicalLed.classList.remove("active", "mode-marquee", "mode-live", "mode-final", "mode-blackout");
+      arrivalLayer.classList.remove("entering");
+      medicalLed.classList.add(`mode-${mode}`);
+    }
+
+    function renderRetained(signatures, activeSignatureId = "", fullScreen = false) {
+      retainedList.replaceChildren();
+      const recent = signatures.filter((signature) => signature.id !== activeSignatureId).slice(-18);
+      if (recent.length === 0) return;
+
+      const laneCount = fullScreen ? 4 : 2;
+      const lanes = fullScreen
+        ? Array.from({ length: laneCount }, (_, laneIndex) => {
+            return rotateSignatures(recent, laneIndex);
+          })
+        : Array.from({ length: laneCount }, (_, laneIndex) => {
+            return recent.filter((_, index) => index % laneCount === laneIndex);
+          }).filter((lane) => lane.length > 0);
+
+      for (const [laneIndex, laneSignatures] of lanes.entries()) {
+        const lane = document.createElement("div");
+        lane.className = `medical-marquee-lane lane-${laneIndex + 1}`;
+
+        const track = document.createElement("div");
+        track.className = "medical-marquee-track";
+
+        const repeated = repeatForLoop(laneSignatures, fullScreen ? 8 : 6);
+        for (const signature of repeated) {
+          track.append(createMarqueeItem(signature));
+        }
+
+        lane.append(track);
+        retainedList.append(lane);
+      }
+    }
+
+    function repeatForLoop(signatures, minimumHalfLength) {
+      const half = [];
+      while (half.length < minimumHalfLength) {
+        half.push(...signatures);
+      }
+      return half.concat(half);
+    }
+
+    function rotateSignatures(signatures, offset) {
+      const pivot = offset % signatures.length;
+      return signatures.slice(pivot).concat(signatures.slice(0, pivot));
+    }
+
+    function createMarqueeItem(signature) {
+      const item = document.createElement("article");
+      item.className = "medical-retained-card";
+
+      const label = document.createElement("span");
+      label.textContent = signature.meta?.doctorName || signature.id;
+
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 1000 500");
+      svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", signatureToPath(signature));
+      svg.append(path);
+
+      item.append(label, svg);
+      return item;
+    }
+
+    function syncSignatureAnimation(state, signature) {
+      const displayMs = Number(state?.displayDurationMs || 9500);
+      const drawMs = Math.min(4200, Math.max(2200, Math.round(displayMs * 0.4)));
+      const activationTime = Date.parse(state?.lastUpdated || signature.createdAt || "");
+      const elapsedMs = Number.isFinite(activationTime) ? Date.now() - activationTime : 0;
+      const clampedElapsed = Math.min(Math.max(0, elapsedMs), Math.max(0, displayMs - 120));
+
+      medicalLed.style.setProperty("--signature-sync-delay", `${-clampedElapsed}ms`);
+      medicalLed.style.setProperty("--signature-cycle-ms", `${displayMs}ms`);
+      medicalLed.style.setProperty("--signature-draw-ms", `${drawMs}ms`);
+      return { drawMs, elapsedMs: clampedElapsed };
+    }
+
+    // Replays the signature stroke by stroke, in writing order. Each stroke
+    // becomes its own <path> so the dash reveal cannot run in parallel across
+    // strokes; draw time is split proportionally to stroke length, with a
+    // short pen-lift gap between strokes.
+    function buildStrokePlayback(signature, sync) {
+      strokeGroup.replaceChildren();
+      const ds = signatureToStrokePaths(signature);
+      if (ds.length === 0) return;
+
+      const penLiftMs = ds.length > 1 ? Math.min(220, 600 / (ds.length - 1)) : 0;
+      const drawBudget = Math.max(400, sync.drawMs - penLiftMs * (ds.length - 1));
+
+      const paths = ds.map((d) => {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", d);
+        strokeGroup.append(path);
+        return path;
+      });
+
+      const lengths = paths.map((path) => Math.max(1, Math.ceil(path.getTotalLength() || 1)));
+      const totalLength = lengths.reduce((sum, length) => sum + length, 0);
+
+      let cursorMs = 0;
+      paths.forEach((path, index) => {
+        const durationMs = Math.max(120, Math.round(drawBudget * (lengths[index] / totalLength)));
+        const delayMs = cursorMs - sync.elapsedMs;
+        path.style.strokeDasharray = String(lengths[index]);
+        path.style.strokeDashoffset = String(lengths[index]);
+        path.style.animation = `drawSignature ${durationMs}ms linear forwards`;
+        path.style.animationDelay = `${delayMs}ms`;
+        cursorMs += durationMs + penLiftMs;
+      });
+
+      return Math.max(0, cursorMs - penLiftMs);
+    }
+
+    function syncMarqueeToClock() {
+      const now = Date.now();
+      retainedList.style.setProperty("--marquee-delay-a", `${-(now % marqueeDurations[0])}ms`);
+      retainedList.style.setProperty("--marquee-delay-b", `${-(now % marqueeDurations[1])}ms`);
+    }
+
+    function setLiveContact(signature) {
+      const lastPoint = latestPoint(signature);
+      if (!lastPoint) {
+        clearLiveContact();
+        return;
+      }
+      medicalLed.style.setProperty("--live-x", `${Math.round(lastPoint.x * 1000) / 10}%`);
+      medicalLed.style.setProperty("--live-y", `${Math.round(lastPoint.y * 1000) / 10}%`);
+      liveContact.hidden = false;
+    }
+
+    function clearLiveContact() {
+      liveContact.hidden = true;
+    }
+
+    // ---- Final-mode aurora: generated video first, canvas fallback ---------
+
+    const auroraVideo = document.querySelector("#auroraVideo");
+    let auroraVideoReady = false;
+    let videoStopTimer = null;
+
+    auroraVideo.addEventListener("canplaythrough", () => { auroraVideoReady = true; });
+    auroraVideo.addEventListener("error", () => { auroraVideoReady = false; });
+
+    function startAuroraFx(elapsedMs = 0) {
+      if (auroraVideoReady) {
+        if (videoStopTimer) {
+          clearTimeout(videoStopTimer);
+          videoStopTimer = null;
+        }
+        stopAuroraBurst();
+        const duration = auroraVideo.duration || 0;
+        if (duration > 0) {
+          auroraVideo.currentTime = (elapsedMs / 1000) % duration;
+        }
+        auroraVideo.play().catch(() => {
+          // Autoplay refused (shouldn't happen for muted video): use canvas.
+          auroraVideoReady = false;
+          startAuroraBurst(elapsedMs);
+        });
+        medicalLed.classList.add("has-aurora-video");
+        return;
+      }
+      medicalLed.classList.remove("has-aurora-video");
+      startAuroraBurst(elapsedMs);
+    }
+
+    function stopAuroraFx() {
+      stopAuroraBurst();
+      if (!auroraVideo.paused) {
+        // Let the CSS opacity fade-out finish before pausing playback.
+        if (videoStopTimer) clearTimeout(videoStopTimer);
+        videoStopTimer = setTimeout(() => {
+          auroraVideo.pause();
+          videoStopTimer = null;
+        }, 800);
+      }
+    }
+
+    const burstCanvas = document.querySelector("#auroraBurst");
+    const burstCtx = burstCanvas.getContext("2d");
+    // Bands render into a low-res offscreen canvas, then get composited with
+    // a blur so the columns melt into silky aurora veils.
+    const bandCanvas = document.createElement("canvas");
+    const bandCtx = bandCanvas.getContext("2d");
+    let burstRaf = null;
+    let burstStartTime = 0;
+    let burstClearTimer = null;
+
+    // Sweeping aurora bands arcing across the sky (reference: aurora borealis
+    // over water), with bright lower edges, upward rays, stars and a
+    // reflection glow near the bottom of the wall.
+    const AURORA_RIBBONS = [
+      { color: [96, 250, 200], alpha: 0.58, baseY: 0.42, ampY: 0.16, speed: 0.28, rayLen: 0.5, rayFreq: 9, phase: 0.8 },
+      { color: [70, 226, 200], alpha: 0.42, baseY: 0.56, ampY: 0.12, speed: -0.2, rayLen: 0.4, rayFreq: 6, phase: 3.6 },
+      { color: [96, 198, 255], alpha: 0.24, baseY: 0.3, ampY: 0.09, speed: 0.15, rayLen: 0.32, rayFreq: 4.5, phase: 5.2 }
+    ];
+    let burstStars = [];
+
+    function startAuroraBurst(elapsedMs = 0) {
+      stopAuroraBurst();
+      if (burstClearTimer) {
+        clearTimeout(burstClearTimer);
+        burstClearTimer = null;
+      }
+      const box = burstCanvas.getBoundingClientRect();
+      burstCanvas.width = Math.max(2, Math.round(box.width / 2));
+      burstCanvas.height = Math.max(2, Math.round(box.height / 2));
+      bandCanvas.width = Math.max(2, Math.round(box.width / 4));
+      bandCanvas.height = Math.max(2, Math.round(box.height / 4));
+      burstStars = Array.from({ length: Math.round(burstCanvas.width / 7) }, () => ({
+        x: Math.random() * burstCanvas.width,
+        y: Math.random() * burstCanvas.height * 0.72,
+        r: 0.6 + Math.random() * 1.2,
+        tw: Math.random() * Math.PI * 2,
+        spd: 0.4 + Math.random() * 1.6
+      }));
+      burstStartTime = performance.now() - elapsedMs;
+      burstRaf = requestAnimationFrame(drawAuroraBurst);
+    }
+
+    function stopAuroraBurst() {
+      if (burstRaf) {
+        cancelAnimationFrame(burstRaf);
+        burstRaf = null;
+        // Keep the last frame visible while the CSS opacity fade-out runs.
+        burstClearTimer = setTimeout(() => {
+          burstCtx.clearRect(0, 0, burstCanvas.width, burstCanvas.height);
+          burstClearTimer = null;
+        }, 800);
+      }
+    }
+
+    function drawAuroraBurst(now) {
+      const t = (now - burstStartTime) / 1000;
+      const w = bandCanvas.width;
+      const h = bandCanvas.height;
+      const ramp = Math.min(1, t / 0.7); // intensity ramp-in
+
+      bandCtx.clearRect(0, 0, w, h);
+      bandCtx.globalCompositeOperation = "lighter";
+
+      const step = Math.max(2, Math.round(w / 200));
+      const horizon = h * 0.9;
+      const reflection = [];
+
+      for (const [ribbonIndex, ribbon] of AURORA_RIBBONS.entries()) {
+        const [r, g, b] = ribbon.color;
+        for (let x = 0; x <= w; x += step) {
+          const u = x / w;
+          // large sweeping S-curves arcing across the sky
+          const curve =
+            Math.sin(u * 2.4 + t * ribbon.speed + ribbon.phase) * 0.62 +
+            Math.sin(u * 5.1 - t * ribbon.speed * 0.7 + ribbon.phase * 1.7) * 0.38;
+          const spine = h * (ribbon.baseY + ribbon.ampY * curve);
+
+          // gentle brightness variation along the band: silk, not pickets
+          const ray =
+            (Math.sin(u * ribbon.rayFreq * Math.PI + t * ribbon.speed * 2.2 + ribbon.phase) * 0.5 + 0.5) * 0.65 +
+            (Math.sin(u * ribbon.rayFreq * 2.3 * Math.PI - t * ribbon.speed * 1.4) * 0.5 + 0.5) * 0.35;
+          const alpha = ribbon.alpha * ramp * (0.5 + 0.5 * ray);
+
+          // tall soft veil rising from the band
+          const rayH = h * ribbon.rayLen * (0.75 + 0.25 * Math.sin(u * 2.7 + t * 0.4 + ribbon.phase)) * (0.7 + 0.3 * ray);
+          const up = bandCtx.createLinearGradient(0, spine, 0, spine - rayH);
+          up.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
+          up.addColorStop(0.25, `rgba(${r}, ${g}, ${b}, ${alpha * 0.55})`);
+          up.addColorStop(0.65, `rgba(${r}, ${g}, ${b}, ${alpha * 0.2})`);
+          up.addColorStop(1, "rgba(0, 0, 0, 0)");
+          bandCtx.fillStyle = up;
+          bandCtx.fillRect(x, spine - rayH, step + 1, rayH);
+
+          // bright leading edge melting downward, like the reference photo
+          const edgeH = h * 0.1;
+          const edge = bandCtx.createLinearGradient(0, spine, 0, spine + edgeH);
+          edge.addColorStop(0, `rgba(${Math.min(255, r + 120)}, ${Math.min(255, g + 40)}, ${Math.min(255, b + 60)}, ${alpha * 0.8})`);
+          edge.addColorStop(0.35, `rgba(${r}, ${g}, ${b}, ${alpha * 0.3})`);
+          edge.addColorStop(1, "rgba(0, 0, 0, 0)");
+          bandCtx.fillStyle = edge;
+          bandCtx.fillRect(x, spine, step + 1, edgeH);
+
+          if (ribbonIndex === 0) reflection.push({ x, alpha });
+        }
+      }
+
+      // soft water-like reflection glow near the bottom edge
+      for (const column of reflection) {
+        const glow = bandCtx.createLinearGradient(0, horizon, 0, h);
+        glow.addColorStop(0, `rgba(86, 235, 205, ${column.alpha * 0.22})`);
+        glow.addColorStop(1, "rgba(86, 235, 205, 0)");
+        bandCtx.fillStyle = glow;
+        bandCtx.fillRect(column.x, horizon, step + 1, h - horizon);
+      }
+
+      // composite: blurred bands first, then crisp twinkling stars
+      const mainW = burstCanvas.width;
+      const mainH = burstCanvas.height;
+      burstCtx.clearRect(0, 0, mainW, mainH);
+      burstCtx.globalCompositeOperation = "lighter";
+      burstCtx.filter = `blur(${Math.max(2, Math.round(mainW / 320))}px)`;
+      burstCtx.drawImage(bandCanvas, 0, 0, mainW, mainH);
+      burstCtx.filter = "none";
+
+      for (const star of burstStars) {
+        const twinkle = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(t * star.spd + star.tw));
+        burstCtx.fillStyle = `rgba(225, 245, 255, ${0.75 * twinkle * ramp})`;
+        burstCtx.fillRect(star.x, star.y, star.r, star.r);
+      }
+
+      burstCtx.globalCompositeOperation = "source-over";
+      burstRaf = requestAnimationFrame(drawAuroraBurst);
+    }
+
+    function latestPoint(signature) {
+      const strokes = signature?.strokes || [];
+      for (let i = strokes.length - 1; i >= 0; i -= 1) {
+        const stroke = strokes[i] || [];
+        if (stroke.length > 0) return stroke[stroke.length - 1];
+      }
+      return null;
+    }
+
+    connectEvents({
+      connection(connected) {
+        statusText.dataset.connected = connected ? "true" : "false";
+      },
+      state: renderScene,
+      "signature:live": renderScene,
+      "signature:live-clear": renderScene,
+      "signature:submitted": renderScene,
+      "signature:removed": renderScene,
+      "cue:reset": renderScene,
+      "cue:idle": renderScene,
+      "cue:auto-idle": renderScene,
+      "cue:blackout": renderScene,
+      "cue:clear-signatures": renderScene
+    });
+  </script>
+</body>
+</html>
