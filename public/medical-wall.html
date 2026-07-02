@@ -16,7 +16,7 @@
         <span class="aurora-ribbon ribbon-3"></span>
         <span class="aurora-ribbon ribbon-4"></span>
       </div>
-      <video class="medical-aurora-video" id="auroraVideo" src="/assets/aurora-final.mp4" muted loop playsinline preload="auto" aria-hidden="true"></video>
+      <video class="medical-aurora-video" id="auroraVideo" src="/assets/aurora-final.mp4" muted playsinline preload="auto" aria-hidden="true"></video>
       <canvas class="medical-aurora-burst" id="auroraBurst" aria-hidden="true"></canvas>
       <div class="medical-arrival" id="arrivalLayer" aria-live="polite">
         <svg class="medical-signature" id="signatureSvg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet" aria-label="醫師簽名">
@@ -76,9 +76,6 @@
       signaturePath.setAttribute("d", d);
       signaturePath.style.strokeDasharray = "";
       signaturePath.style.strokeDashoffset = "";
-      medicalLed.style.removeProperty("--signature-sync-delay");
-      medicalLed.style.removeProperty("--signature-cycle-ms");
-      medicalLed.style.removeProperty("--signature-draw-ms");
       setLiveContact(signature);
       setMode("live");
 
@@ -94,8 +91,8 @@
       signaturePath.removeAttribute("d");
       clearLiveContact();
       const sync = syncSignatureAnimation(state, signature);
-      const drawTotalMs = buildStrokePlayback(signature, sync);
-      applyArrivalCycle(state, sync, drawTotalMs);
+      buildStrokePlayback(signature);
+      applyArrivalCycle(state, sync);
       startAuroraFx(sync.elapsedMs);
       setMode("final", true);
 
@@ -108,13 +105,15 @@
       });
     }
 
-    // The blur-out must wait until the whole signature has been drawn:
-    // enter plays immediately, exit is delayed past the stroke playback end.
-    function applyArrivalCycle(state, sync, drawTotalMs) {
-      const displayMs = Number(state?.displayDurationMs || 9500);
+    // Signature is shown instantly, so the only thing this schedules is a
+    // hold followed by a blur-out timed to land just before displayDurationMs
+    // — which is kept at/under the aurora video's natural length so the
+    // background is still playing (not frozen) when everything fades out.
+    function applyArrivalCycle(state, sync) {
+      const displayMs = Number(state?.displayDurationMs || 7800);
       const exitMs = 950;
       const holdMs = 400;
-      const exitDelay = Math.max(drawTotalMs + holdMs, displayMs - exitMs - 150) - sync.elapsedMs;
+      const exitDelay = Math.max(holdMs, displayMs - exitMs - 150) - sync.elapsedMs;
 
       arrivalLayer.style.animation = "none";
       void arrivalLayer.offsetWidth; // restart animations on replay
@@ -130,9 +129,6 @@
       stopAuroraFx();
       signaturePath.style.strokeDasharray = "";
       signaturePath.style.strokeDashoffset = "";
-      medicalLed.style.removeProperty("--signature-sync-delay");
-      medicalLed.style.removeProperty("--signature-cycle-ms");
-      medicalLed.style.removeProperty("--signature-draw-ms");
       clearLiveContact();
       setMode(nextStatus === "blackout" ? "blackout" : "marquee");
       currentLabel.textContent = "";
@@ -211,53 +207,29 @@
       return item;
     }
 
+    // Only tracks how far into the display window a late-joining client is
+    // (e.g. a browser opened mid-cue), so aurora/exit timing still lines up.
     function syncSignatureAnimation(state, signature) {
-      const displayMs = Number(state?.displayDurationMs || 9500);
-      const drawMs = Math.min(4200, Math.max(2200, Math.round(displayMs * 0.4)));
+      const displayMs = Number(state?.displayDurationMs || 7800);
       const activationTime = Date.parse(state?.lastUpdated || signature.createdAt || "");
       const elapsedMs = Number.isFinite(activationTime) ? Date.now() - activationTime : 0;
       const clampedElapsed = Math.min(Math.max(0, elapsedMs), Math.max(0, displayMs - 120));
-
-      medicalLed.style.setProperty("--signature-sync-delay", `${-clampedElapsed}ms`);
-      medicalLed.style.setProperty("--signature-cycle-ms", `${displayMs}ms`);
-      medicalLed.style.setProperty("--signature-draw-ms", `${drawMs}ms`);
-      return { drawMs, elapsedMs: clampedElapsed };
+      return { elapsedMs: clampedElapsed };
     }
 
-    // Replays the signature stroke by stroke, in writing order. Each stroke
-    // becomes its own <path> so the dash reveal cannot run in parallel across
-    // strokes; draw time is split proportionally to stroke length, with a
-    // short pen-lift gap between strokes.
-    function buildStrokePlayback(signature, sync) {
+    // Shows the finished signature immediately (no stroke-by-stroke replay):
+    // the arrivalLayer's own enter animation (scale + fade) is the only
+    // reveal motion. Keeps final-mode short enough to fit inside the aurora
+    // video's natural length instead of running past it.
+    function buildStrokePlayback(signature) {
       strokeGroup.replaceChildren();
       const ds = signatureToStrokePaths(signature);
-      if (ds.length === 0) return;
-
-      const penLiftMs = ds.length > 1 ? Math.min(220, 600 / (ds.length - 1)) : 0;
-      const drawBudget = Math.max(400, sync.drawMs - penLiftMs * (ds.length - 1));
-
-      const paths = ds.map((d) => {
+      for (const d of ds) {
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.setAttribute("d", d);
         strokeGroup.append(path);
-        return path;
-      });
-
-      const lengths = paths.map((path) => Math.max(1, Math.ceil(path.getTotalLength() || 1)));
-      const totalLength = lengths.reduce((sum, length) => sum + length, 0);
-
-      let cursorMs = 0;
-      paths.forEach((path, index) => {
-        const durationMs = Math.max(120, Math.round(drawBudget * (lengths[index] / totalLength)));
-        const delayMs = cursorMs - sync.elapsedMs;
-        path.style.strokeDasharray = String(lengths[index]);
-        path.style.strokeDashoffset = String(lengths[index]);
-        path.style.animation = `drawSignature ${durationMs}ms linear forwards`;
-        path.style.animationDelay = `${delayMs}ms`;
-        cursorMs += durationMs + penLiftMs;
-      });
-
-      return Math.max(0, cursorMs - penLiftMs);
+      }
+      return 0;
     }
 
     function syncMarqueeToClock() {
@@ -297,9 +269,12 @@
           videoStopTimer = null;
         }
         stopAuroraBurst();
+        // No loop attribute (plays once, then holds the last frame): a late
+        // joiner past the video's natural end just sees that held frame
+        // instead of a modulo-wrapped restart.
         const duration = auroraVideo.duration || 0;
         if (duration > 0) {
-          auroraVideo.currentTime = (elapsedMs / 1000) % duration;
+          auroraVideo.currentTime = Math.min(elapsedMs / 1000, duration);
         }
         auroraVideo.play().catch(() => {
           // Autoplay refused (shouldn't happen for muted video): use canvas.
@@ -313,6 +288,10 @@
       startAuroraBurst(elapsedMs);
     }
 
+    // Matches the 1300ms opacity transition on .medical-aurora-video /
+    // .medical-aurora-burst in app.css, plus a small margin.
+    const auroraFadeMs = 1300;
+
     function stopAuroraFx() {
       stopAuroraBurst();
       if (!auroraVideo.paused) {
@@ -321,7 +300,7 @@
         videoStopTimer = setTimeout(() => {
           auroraVideo.pause();
           videoStopTimer = null;
-        }, 800);
+        }, auroraFadeMs + 100);
       }
     }
 
@@ -375,7 +354,7 @@
         burstClearTimer = setTimeout(() => {
           burstCtx.clearRect(0, 0, burstCanvas.width, burstCanvas.height);
           burstClearTimer = null;
-        }, 800);
+        }, auroraFadeMs + 100);
       }
     }
 
@@ -383,7 +362,7 @@
       const t = (now - burstStartTime) / 1000;
       const w = bandCanvas.width;
       const h = bandCanvas.height;
-      const ramp = Math.min(1, t / 0.7); // intensity ramp-in
+      const ramp = Math.min(1, t / (auroraFadeMs / 1000)); // intensity ramp-in, synced to the CSS fade
 
       bandCtx.clearRect(0, 0, w, h);
       bandCtx.globalCompositeOperation = "lighter";

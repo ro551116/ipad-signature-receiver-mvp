@@ -22,6 +22,35 @@
     <main class="control-main">
       <div class="control-grid">
         <section class="panel">
+          <h2>Quick Links</h2>
+          <p>直接開啟電視牆 / 簽名頁，或複製連結傳給操作裝置。</p>
+          <div class="quick-links">
+            <div class="quick-link-row">
+              <span>電視牆</span>
+              <div class="control-actions nav">
+                <button type="button" data-open="/wall">開啟</button>
+                <button type="button" class="secondary" data-copy="/wall">複製連結</button>
+              </div>
+            </div>
+            <div class="quick-link-row">
+              <span>醫師迎賓牆</span>
+              <div class="control-actions nav">
+                <button type="button" data-open="/medical-wall">開啟</button>
+                <button type="button" class="secondary" data-copy="/medical-wall">複製連結</button>
+              </div>
+            </div>
+            <div class="quick-link-row">
+              <span>簽名頁</span>
+              <div class="control-actions nav">
+                <button type="button" data-open="/sign">開啟</button>
+                <button type="button" class="secondary" data-copy="/sign">複製連結</button>
+              </div>
+            </div>
+          </div>
+          <p class="toast" id="linkToast"></p>
+        </section>
+
+        <section class="panel">
           <h2>Show Control</h2>
           <p>正式現場一定要讓工作人員能手動接管。這裡先放最基本的 cue。</p>
           <div class="control-actions nav">
@@ -153,6 +182,25 @@
     const previewSvg = document.querySelector("#previewSvg");
     const previewPath = document.querySelector("#previewPath");
     const signatureList = document.querySelector("#signatureList");
+    const linkToast = document.querySelector("#linkToast");
+
+    for (const button of document.querySelectorAll("[data-open]")) {
+      button.addEventListener("click", () => {
+        window.open(new URL(button.dataset.open, location.origin).toString(), "_blank", "noopener");
+      });
+    }
+
+    for (const button of document.querySelectorAll("[data-copy]")) {
+      button.addEventListener("click", async () => {
+        const url = new URL(button.dataset.copy, location.origin).toString();
+        try {
+          await navigator.clipboard.writeText(url);
+          linkToast.textContent = `已複製：${url}`;
+        } catch (error) {
+          linkToast.textContent = `複製失敗（可手動複製）：${url}`;
+        }
+      });
+    }
 
     const cueMap = {
       resetButton: "/api/cue/reset",
