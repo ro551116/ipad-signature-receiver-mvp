@@ -41,7 +41,7 @@
   </div>
 
   <script type="module">
-    import { connectEvents, setDot } from "/assets/shared.js";
+    import { connectEvents, setDot, signHeaders } from "/assets/shared.js";
 
     const canvas = document.querySelector("#signatureCanvas");
     const ctx = canvas.getContext("2d");
@@ -222,7 +222,7 @@
       try {
         await fetch("/api/live-signature", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...signHeaders() },
           body: JSON.stringify(makePayload()),
           signal: liveAbortController.signal
         });
@@ -260,7 +260,7 @@
       try {
         const response = await fetch("/api/signatures", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...signHeaders() },
           body: JSON.stringify(makePayload())
         });
         const payload = await response.json();
@@ -279,7 +279,7 @@
 
     async function clearLiveSignature() {
       try {
-        await fetch("/api/live-signature/clear", { method: "POST" });
+        await fetch("/api/live-signature/clear", { method: "POST", headers: signHeaders() });
       } catch {
         // The local canvas still clears even if the wall is temporarily unreachable.
       }

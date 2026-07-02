@@ -55,6 +55,16 @@ export function controlHeaders() {
   return token ? { "X-Control-Token": token } : {};
 }
 
+// Same pattern for the iPad sign page: open /sign?token=... once so the
+// device sends X-Sign-Token on every signing request (SIGN_TOKEN on the
+// server). No-op (empty headers) if SIGN_TOKEN isn't configured server-side.
+export function signHeaders() {
+  const fromUrl = new URLSearchParams(location.search).get("token");
+  if (fromUrl) sessionStorage.setItem("signToken", fromUrl);
+  const token = fromUrl || sessionStorage.getItem("signToken") || "";
+  return token ? { "X-Sign-Token": token } : {};
+}
+
 export function setDot(dot, connected) {
   dot.classList.toggle("live", connected);
   dot.classList.toggle("error", !connected);

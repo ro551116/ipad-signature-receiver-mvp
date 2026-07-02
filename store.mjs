@@ -2,7 +2,7 @@
 // file so a server restart on site does not wipe the marquee wall.
 
 import path from "node:path";
-import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { writeFile, rename } from "node:fs/promises";
 
 export function createSignatureStore(options = {}) {
@@ -15,6 +15,9 @@ export function createSignatureStore(options = {}) {
   let saveTimer = null;
   let saving = false;
   let pendingSnapshot = null;
+  // Tracks the in-flight write so shutdown can await it instead of racing
+  // process.exit() against an async writeFile()/rename() pair.
+  let inFlight = Promise.resolve();
 
   function load() {
     try {
@@ -30,22 +33,29 @@ export function createSignatureStore(options = {}) {
     return [];
   }
 
+  async function writeSnapshot(snapshot) {
+    mkdirSync(dataDir, { recursive: true });
+    const body = JSON.stringify({ savedAt: new Date().toISOString(), signatures: snapshot }, null, 2);
+    await writeFile(tmpPath, body, "utf8");
+    await rename(tmpPath, filePath);
+  }
+
   async function flush() {
     if (saving || !pendingSnapshot) return;
     saving = true;
     const snapshot = pendingSnapshot;
     pendingSnapshot = null;
-    try {
-      mkdirSync(dataDir, { recursive: true });
-      const body = JSON.stringify({ savedAt: new Date().toISOString(), signatures: snapshot }, null, 2);
-      await writeFile(tmpPath, body, "utf8");
-      await rename(tmpPath, filePath);
-    } catch (error) {
-      log(`save failed: ${error.message}`);
-    } finally {
-      saving = false;
-      if (pendingSnapshot) flush();
-    }
+    inFlight = (async () => {
+      try {
+        await writeSnapshot(snapshot);
+      } catch (error) {
+        log(`save failed: ${error.message}`);
+      } finally {
+        saving = false;
+        if (pendingSnapshot) flush();
+      }
+    })();
+    await inFlight;
   }
 
   function save(signatures) {
@@ -55,22 +65,20 @@ export function createSignatureStore(options = {}) {
     saveTimer.unref();
   }
 
-  // For shutdown: the debounce timer is unref'd, so a signature submitted in
-  // the last debounce window would be silently lost without this.
-  function flushSync() {
-    if (!pendingSnapshot) return;
-    const snapshot = pendingSnapshot;
-    pendingSnapshot = null;
-    if (saveTimer) clearTimeout(saveTimer);
-    try {
-      mkdirSync(dataDir, { recursive: true });
-      const body = JSON.stringify({ savedAt: new Date().toISOString(), signatures: snapshot }, null, 2);
-      writeFileSync(tmpPath, body, "utf8");
-      renameSync(tmpPath, filePath);
-    } catch (error) {
-      log(`flushSync failed: ${error.message}`);
+  // For shutdown: waits for any debounced write (unref'd, so it would
+  // otherwise be silently lost) and any save already in flight — including
+  // one that re-triggers itself because a newer snapshot arrived mid-write —
+  // to fully settle before the process exits.
+  async function flushNow() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    while (pendingSnapshot || saving) {
+      if (pendingSnapshot && !saving) await flush();
+      else await inFlight;
     }
   }
 
-  return { load, save, flushSync, filePath };
+  return { load, save, flushNow, filePath };
 }

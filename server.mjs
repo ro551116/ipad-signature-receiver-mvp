@@ -1,8 +1,9 @@
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { createReadStream, readFileSync, mkdirSync } from "node:fs";
+import { createReadStream, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { stat, writeFile, rename } from "node:fs/promises";
 import { createLightingBridge } from "./lighting.mjs";
 import { createSignatureStore } from "./store.mjs";
@@ -14,14 +15,80 @@ const lightingConfigPath = path.join(dataDir, "lighting-config.json");
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
 const maxSignatures = Number(process.env.MAX_SIGNATURES || 80);
-const displayDurationMs = Number(process.env.DISPLAY_DURATION_MS || 9500);
+// Kept at/under the aurora video's natural length (8s, public/assets/aurora-final.mp4)
+// so the video is still playing — not frozen on its last frame — when the
+// exit fade begins. If the video file changes length, adjust this too.
+const displayDurationMs = Number(process.env.DISPLAY_DURATION_MS || 7800);
 // Show-control endpoints (cues, deletes, lighting) require this token when
-// set. Signing and display endpoints stay open. Set it before any real event:
-// guests share the venue Wi-Fi with this server.
-const controlToken = process.env.CONTROL_TOKEN || "";
+// set. Set it before any real event: guests share the venue Wi-Fi with this
+// server. Without a token, control is only left open on a loopback bind
+// (127.0.0.1/localhost) or when explicitly opted into via
+// ALLOW_UNSAFE_NO_CONTROL_TOKEN — anything else (e.g. the default 0.0.0.0)
+// rejects control requests rather than failing open.
+let controlToken = process.env.CONTROL_TOKEN || "";
+const allowUnsafeNoToken = process.env.ALLOW_UNSAFE_NO_CONTROL_TOKEN === "1";
+const isLoopbackHost = host === "127.0.0.1" || host === "localhost" || host === "::1";
+// Remembers whatever was typed at the prompt below so this machine doesn't
+// ask again next run. Lives under data/ (gitignored) — never committed, so
+// this file is machine-local and not part of the public repo.
+const controlTokenFile = path.join(dataDir, "control-token");
+
+// Signing endpoints (POST /api/live-signature, /api/live-signature/clear,
+// /api/signatures) are open by default (MVP: any device on the venue Wi-Fi
+// can sign). Set SIGN_TOKEN to require iPads to present X-Sign-Token.
+const signToken = process.env.SIGN_TOKEN || "";
 
 function isAuthorized(req) {
-  return !controlToken || req.headers["x-control-token"] === controlToken;
+  if (controlToken) return req.headers["x-control-token"] === controlToken;
+  return isLoopbackHost || allowUnsafeNoToken;
+}
+
+function isSignerAuthorized(req) {
+  if (!signToken) return true;
+  return req.headers["x-sign-token"] === signToken;
+}
+
+function loadSavedControlToken() {
+  try {
+    return readFileSync(controlTokenFile, "utf8").trim();
+  } catch {
+    return "";
+  }
+}
+
+function saveControlToken(token) {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(controlTokenFile, token, "utf8");
+  } catch (error) {
+    console.warn(`[security] could not save control token: ${error.message}`);
+  }
+}
+
+function promptControlToken(defaultToken) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const hint = defaultToken ? " (Enter to reuse the saved token)" : "";
+    rl.question(`Set CONTROL_TOKEN for /control${hint}: `, (answer) => {
+      rl.close();
+      resolve(answer.trim() || defaultToken);
+    });
+  });
+}
+
+// CONTROL_TOKEN env wins outright (scripted/production start, no prompt).
+// Otherwise, if this is an interactive terminal, ask once and remember the
+// answer in controlTokenFile so the next `npm start` on this machine doesn't
+// ask again. Non-interactive runs (systemd/CI/piped input) skip the prompt
+// and fall through to the fail-closed check further below.
+async function resolveControlToken() {
+  if (controlToken) return;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return;
+  const saved = loadSavedControlToken();
+  const answer = await promptControlToken(saved);
+  if (!answer) return;
+  controlToken = answer;
+  if (answer !== saved) saveControlToken(answer);
 }
 
 function loadLightingConfig() {
@@ -180,6 +247,14 @@ function safeSignatureId(value) {
   return id;
 }
 
+function safeDecodeURIComponent(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 function clamp(value, min, max) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
@@ -217,7 +292,12 @@ async function serveStatic(req, res, pathname) {
   ]);
 
   const targetPath = pageAliases.get(pathname) || pathname;
-  const decoded = decodeURIComponent(targetPath);
+  const decoded = safeDecodeURIComponent(targetPath);
+  if (decoded === null) {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Bad request");
+    return;
+  }
   const safePath = path.normalize(decoded).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(publicDir, safePath);
 
@@ -297,6 +377,17 @@ const server = http.createServer(async (req, res) => {
   // Control actions are destructive or show-affecting: always leave a trace.
   if (isControlRequest) {
     console.log(`[control] ${new Date().toISOString()} ${req.method} ${pathname} from ${req.socket.remoteAddress}`);
+  }
+
+  const isSigningRequest =
+    req.method === "POST" &&
+    (pathname === "/api/live-signature" ||
+      pathname === "/api/live-signature/clear" ||
+      pathname === "/api/signatures");
+
+  if (isSigningRequest && !isSignerAuthorized(req)) {
+    json(res, 403, { ok: false, error: "forbidden: missing or wrong X-Sign-Token" });
+    return;
   }
 
   if (req.method === "GET" && pathname === "/events") {
@@ -470,7 +561,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "DELETE" && pathname.startsWith("/api/signatures/")) {
-    const id = decodeURIComponent(pathname.slice("/api/signatures/".length));
+    const id = safeDecodeURIComponent(pathname.slice("/api/signatures/".length));
+    if (id === null) {
+      json(res, 400, { ok: false, error: "invalid signature id" });
+      return;
+    }
     const index = signatures.findIndex((item) => item.id === id);
     if (index < 0) {
       json(res, 404, { ok: false, error: "signature not found" });
@@ -542,31 +637,50 @@ const server = http.createServer(async (req, res) => {
   await serveStatic(req, res, pathname);
 });
 
-server.listen(port, host, () => {
-  const urls = getLocalUrls(port);
-  console.log(`iPad Signature Receiver MVP running on port ${port}`);
-  console.log("Open on this computer:");
-  console.log(`  http://localhost:${port}`);
-  console.log("Open from iPad on the same Wi-Fi:");
-  for (const url of urls) console.log(`  ${url}`);
-  const lightingState = lighting.state();
-  console.log(`Lighting signal mode: ${lightingState.mode}`);
-  if (lightingState.mode.startsWith("artnet")) {
-    const a = lightingState.config.artnet;
-    console.log(`  Art-Net -> ${a.host}:${a.port} universe ${a.universe}` +
-      (lightingState.mode === "artnet-trigger"
-        ? ` trigger ch${a.triggerChannel} (idle:${a.triggerValues.idle} live:${a.triggerValues.live} final:${a.triggerValues.final} blackout:${a.triggerValues.blackout})`
-        : ` (${a.parCount}x ${a.profile} PAR @ ${a.fps}fps)`));
-  }
-  if (lightingState.mode === "osc") {
-    const o = lightingState.config.osc;
-    console.log(`  OSC -> ${o.host}:${o.port} ${o.address}`);
-  }
-  console.log(`Signatures restored: ${signatures.length} (${store.filePath})`);
-});
+async function main() {
+  await resolveControlToken();
 
-function shutdown() {
-  store.flushSync();
+  if (!controlToken && !isLoopbackHost) {
+    console.warn(
+      allowUnsafeNoToken
+        ? `[security] CONTROL_TOKEN not set while bound to ${host}: control endpoints (blackout/clear/lighting) are OPEN to anyone on this network (ALLOW_UNSAFE_NO_CONTROL_TOKEN=1).`
+        : `[security] CONTROL_TOKEN not set while bound to ${host}: control endpoints will reject requests with 403 until CONTROL_TOKEN is set. Set ALLOW_UNSAFE_NO_CONTROL_TOKEN=1 to explicitly allow open control instead (not recommended for a real event).`
+    );
+  }
+
+  server.listen(port, host, () => {
+    const actualPort = server.address().port;
+    const urls = getLocalUrls(actualPort);
+    console.log(`iPad Signature Receiver MVP running on port ${actualPort}`);
+    console.log("Open on this computer:");
+    console.log(`  http://localhost:${actualPort}`);
+    console.log("Open from iPad on the same Wi-Fi:");
+    for (const url of urls) console.log(`  ${url}`);
+    const lightingState = lighting.state();
+    console.log(`Lighting signal mode: ${lightingState.mode}`);
+    if (lightingState.mode.startsWith("artnet")) {
+      const a = lightingState.config.artnet;
+      console.log(`  Art-Net -> ${a.host}:${a.port} universe ${a.universe}` +
+        (lightingState.mode === "artnet-trigger"
+          ? ` trigger ch${a.triggerChannel} (idle:${a.triggerValues.idle} live:${a.triggerValues.live} final:${a.triggerValues.final} blackout:${a.triggerValues.blackout})`
+          : ` (${a.parCount}x ${a.profile} PAR @ ${a.fps}fps)`));
+    }
+    if (lightingState.mode === "osc") {
+      const o = lightingState.config.osc;
+      console.log(`  OSC -> ${o.host}:${o.port} ${o.address}`);
+    }
+    console.log(`Signatures restored: ${signatures.length} (${store.filePath})`);
+    if (controlToken) console.log(`Control token in effect (open /control?token=... once per browser tab).`);
+  });
+}
+
+main();
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await store.flushNow();
   lighting.close();
   process.exit(0);
 }

@@ -14,6 +14,20 @@ npm start
 
 Server 預設跑在 `0.0.0.0:3000`。
 
+## Security / Auth
+
+Server 預設綁 `0.0.0.0`，代表同一個 Wi-Fi 的任何裝置都能連到 `/control`、`/sign` 等端點，正式上場前務必設定：
+
+| 環境變數 | 保護對象 | 行為 |
+|---|---|---|
+| `CONTROL_TOKEN` | show-control 端點（`/api/cue/*`、`DELETE /api/signatures/:id`、`/api/lighting/*`） | 未設定且非 loopback（`127.0.0.1`/`localhost`）時，這些端點**預設回 403**（fail-closed），不再是任何人都能打 blackout / 清空簽名 / 改燈光設定 |
+| `SIGN_TOKEN` | 簽名端點（`/api/live-signature`、`/api/live-signature/clear`、`/api/signatures`） | 未設定時維持開放（MVP 預設行為）；設定後 iPad 需帶 `?token=...` 開一次 `/sign` 頁面（存 sessionStorage），未帶正確 token 回 403 |
+| `ALLOW_UNSAFE_NO_CONTROL_TOKEN=1` | 明確選擇不設 `CONTROL_TOKEN` 也要開放 control 端點（例如純內網快速測試） | 繞過上面的 403，等同回到舊版 fail-open 行為，**不建議用在真實活動** |
+
+`/control` 頁面透過 `?token=...`（存 sessionStorage）帶 `X-Control-Token`；`/sign` 頁面同樣模式帶 `X-Sign-Token`。
+
+**互動式輸入**：沒設 `CONTROL_TOKEN` 環境變數、且 `npm start` 是在真實終端機（TTY）跑時，啟動會跳出 `Set CONTROL_TOKEN for /control:` 提示，直接按 Enter 會沿用上次存的 token（存在 `data/control-token`，此檔已 gitignore，不會進 repo）；systemd / CI / 非互動環境會自動跳過提示，直接走上表的 fail-closed 邏輯。
+
 ## Pages
 
 - `/sign` — iPad 簽名端
