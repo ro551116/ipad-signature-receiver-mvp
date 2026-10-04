@@ -18,6 +18,7 @@
       </div>
       <video class="medical-aurora-video" id="auroraVideo" src="/assets/aurora-final.mp4" muted playsinline preload="auto" aria-hidden="true"></video>
       <canvas class="medical-aurora-burst" id="auroraBurst" aria-hidden="true"></canvas>
+      <img class="medical-brand" src="/assets/nordberg-medical-logo-light.png" alt="Nordberg Medical">
       <div class="medical-arrival" id="arrivalLayer" aria-live="polite">
         <svg class="medical-signature" id="signatureSvg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet" aria-label="醫師簽名">
           <path id="signaturePath"></path>
@@ -44,31 +45,47 @@
     const retainedList = document.querySelector("#retainedList");
     const statusText = document.querySelector("#statusText");
     const marqueeDurations = [32000, 39000];
+    const marqueeLaneCount = 4;
     let currentMode = "";
+    // serverNow - local clock, refreshed from every full state. Reveal/exit
+    // timing runs on server time so a wall PC with a drifting clock still
+    // lines up with the server's return-to-marquee.
+    let clockOffsetMs = 0;
+    // id|activeSince of the final reveal on screen: unrelated broadcasts
+    // during the display window must not restart it.
+    let finalKey = "";
+    // signaturesVersion the marquee was built from; rebuilding is the only
+    // expensive DOM work here, so it happens only when the list changes.
+    let marqueeVersion = null;
 
-    function renderScene(state) {
-      const liveSignature = state?.liveSignature;
-      const signature = state?.currentSignature;
-      syncMarqueeToClock();
+    function renderState(state) {
+      if (!state) return;
+      if (Number.isFinite(state.serverNow)) clockOffsetMs = state.serverNow - Date.now();
       medicalStage.classList.remove("blackout");
 
-      if (liveSignature) {
-        renderRetained(state?.signatures || [], liveSignature.id, true);
-        renderLiveSignature(liveSignature, state);
+      if (state.liveSignature) {
+        renderLiveSignature(state.liveSignature, state);
         return;
       }
 
-      if (signature) {
-        renderRetained(state?.signatures || [], signature.id, false);
-        renderFinalSignature(signature, state);
+      if (state.currentSignature) {
+        renderFinalSignature(state.currentSignature, state);
         return;
       }
 
-      renderRetained(state?.signatures || [], "", true);
-      clearSignature(state?.status || "idle");
+      renderMarquee(state);
+      clearSignature(state.status || "idle");
+    }
+
+    // Live frames carry only the stroke being written (no retained list).
+    function renderLiveFrame(frame) {
+      if (!frame?.liveSignature) return;
+      medicalStage.classList.remove("blackout");
+      renderLiveSignature(frame.liveSignature, frame);
     }
 
     function renderLiveSignature(signature, state) {
+      finalKey = "";
       strokeGroup.replaceChildren();
       arrivalLayer.style.animation = "";
       stopAuroraFx();
@@ -88,12 +105,16 @@
     }
 
     function renderFinalSignature(signature, state) {
+      const key = `${signature.id}|${state.activeSince}`;
+      if (key === finalKey && currentMode === "final") return;
+      finalKey = key;
+
       signaturePath.removeAttribute("d");
       clearLiveContact();
-      const sync = syncSignatureAnimation(state, signature);
+      const elapsedMs = displayElapsedMs(state);
       buildStrokePlayback(signature);
-      applyArrivalCycle(state, sync);
-      startAuroraFx(sync.elapsedMs);
+      applyArrivalCycle(state, elapsedMs);
+      startAuroraFx(elapsedMs);
       setMode("final", true);
 
       currentLabel.textContent = "";
@@ -109,20 +130,21 @@
     // hold followed by a blur-out timed to land just before displayDurationMs
     // — which is kept at/under the aurora video's natural length so the
     // background is still playing (not frozen) when everything fades out.
-    function applyArrivalCycle(state, sync) {
+    function applyArrivalCycle(state, elapsedMs) {
       const displayMs = Number(state?.displayDurationMs || 7800);
       const exitMs = 950;
       const holdMs = 400;
-      const exitDelay = Math.max(holdMs, displayMs - exitMs - 150) - sync.elapsedMs;
+      const exitDelay = Math.max(holdMs, displayMs - exitMs - 150) - elapsedMs;
 
       arrivalLayer.style.animation = "none";
       void arrivalLayer.offsetWidth; // restart animations on replay
       arrivalLayer.style.animation =
-        `medicalSignatureEnter 800ms cubic-bezier(0.19, 1, 0.22, 1) ${-sync.elapsedMs}ms forwards, ` +
+        `medicalSignatureEnter 800ms cubic-bezier(0.19, 1, 0.22, 1) ${-elapsedMs}ms forwards, ` +
         `medicalSignatureExit ${exitMs}ms ease-in ${exitDelay}ms forwards`;
     }
 
     function clearSignature(nextStatus = "idle") {
+      finalKey = "";
       signaturePath.removeAttribute("d");
       strokeGroup.replaceChildren();
       arrivalLayer.style.animation = "";
@@ -144,29 +166,24 @@
       medicalLed.classList.add(`mode-${mode}`);
     }
 
-    function renderRetained(signatures, activeSignatureId = "", fullScreen = false) {
+    // The marquee is only visible in marquee mode (hidden by CSS otherwise),
+    // so it is rebuilt from the newest signatures when that list changes.
+    function renderMarquee(state) {
+      if (state.signaturesVersion === marqueeVersion) return;
+      marqueeVersion = state.signaturesVersion;
+      syncMarqueeToClock();
       retainedList.replaceChildren();
-      const recent = signatures.filter((signature) => signature.id !== activeSignatureId).slice(-18);
+      const recent = (state.recentSignatures || []).slice(-18);
       if (recent.length === 0) return;
 
-      const laneCount = fullScreen ? 4 : 2;
-      const lanes = fullScreen
-        ? Array.from({ length: laneCount }, (_, laneIndex) => {
-            return rotateSignatures(recent, laneIndex);
-          })
-        : Array.from({ length: laneCount }, (_, laneIndex) => {
-            return recent.filter((_, index) => index % laneCount === laneIndex);
-          }).filter((lane) => lane.length > 0);
-
-      for (const [laneIndex, laneSignatures] of lanes.entries()) {
+      for (let laneIndex = 0; laneIndex < marqueeLaneCount; laneIndex += 1) {
         const lane = document.createElement("div");
         lane.className = `medical-marquee-lane lane-${laneIndex + 1}`;
 
         const track = document.createElement("div");
         track.className = "medical-marquee-track";
 
-        const repeated = repeatForLoop(laneSignatures, fullScreen ? 8 : 6);
-        for (const signature of repeated) {
+        for (const signature of repeatForLoop(rotateSignatures(recent, laneIndex), 8)) {
           track.append(createMarqueeItem(signature));
         }
 
@@ -207,14 +224,13 @@
       return item;
     }
 
-    // Only tracks how far into the display window a late-joining client is
-    // (e.g. a browser opened mid-cue), so aurora/exit timing still lines up.
-    function syncSignatureAnimation(state, signature) {
+    // How far into the display window this wall is, in server time — a wall
+    // opened mid-cue (or reconnecting) joins the reveal where it actually is.
+    function displayElapsedMs(state) {
       const displayMs = Number(state?.displayDurationMs || 7800);
-      const activationTime = Date.parse(state?.lastUpdated || signature.createdAt || "");
-      const elapsedMs = Number.isFinite(activationTime) ? Date.now() - activationTime : 0;
-      const clampedElapsed = Math.min(Math.max(0, elapsedMs), Math.max(0, displayMs - 120));
-      return { elapsedMs: clampedElapsed };
+      const startedAt = state?.activeSince;
+      const elapsedMs = Number.isFinite(startedAt) ? Date.now() + clockOffsetMs - startedAt : 0;
+      return Math.min(Math.max(0, elapsedMs), Math.max(0, displayMs - 120));
     }
 
     // Shows the finished signature immediately (no stroke-by-stroke replay):
@@ -223,13 +239,11 @@
     // video's natural length instead of running past it.
     function buildStrokePlayback(signature) {
       strokeGroup.replaceChildren();
-      const ds = signatureToStrokePaths(signature);
-      for (const d of ds) {
+      for (const d of signatureToStrokePaths(signature)) {
         const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
         path.setAttribute("d", d);
         strokeGroup.append(path);
       }
-      return 0;
     }
 
     function syncMarqueeToClock() {
@@ -447,20 +461,20 @@
       return null;
     }
 
-    connectEvents({
+    connectEvents("wall", {
       connection(connected) {
         statusText.dataset.connected = connected ? "true" : "false";
       },
-      state: renderScene,
-      "signature:live": renderScene,
-      "signature:live-clear": renderScene,
-      "signature:submitted": renderScene,
-      "signature:removed": renderScene,
-      "cue:reset": renderScene,
-      "cue:idle": renderScene,
-      "cue:auto-idle": renderScene,
-      "cue:blackout": renderScene,
-      "cue:clear-signatures": renderScene
+      state: renderState,
+      "signature:live": renderLiveFrame,
+      "signature:live-clear": renderState,
+      "signature:submitted": renderState,
+      "signature:removed": renderState,
+      "cue:reset": renderState,
+      "cue:idle": renderState,
+      "cue:auto-idle": renderState,
+      "cue:blackout": renderState,
+      "cue:clear-signatures": renderState
     });
   </script>
 </body>

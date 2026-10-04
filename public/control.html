@@ -23,27 +23,34 @@
       <div class="control-grid">
         <section class="panel">
           <h2>Quick Links</h2>
-          <p>直接開啟電視牆 / 簽名頁，或複製連結傳給操作裝置。</p>
+          <p>直接開啟電視牆 / 簽名頁，或複製連結傳給操作裝置。連結已帶好對應的 token。</p>
           <div class="quick-links">
             <div class="quick-link-row">
               <span>電視牆</span>
               <div class="control-actions nav">
-                <button type="button" data-open="/wall">開啟</button>
-                <button type="button" class="secondary" data-copy="/wall">複製連結</button>
+                <button type="button" data-open="wall">開啟</button>
+                <button type="button" class="secondary" data-copy="wall">複製連結</button>
               </div>
             </div>
             <div class="quick-link-row">
               <span>醫師迎賓牆</span>
               <div class="control-actions nav">
-                <button type="button" data-open="/medical-wall">開啟</button>
-                <button type="button" class="secondary" data-copy="/medical-wall">複製連結</button>
+                <button type="button" data-open="medicalWall">開啟</button>
+                <button type="button" class="secondary" data-copy="medicalWall">複製連結</button>
+              </div>
+            </div>
+            <div class="quick-link-row">
+              <span>黑布簾投影</span>
+              <div class="control-actions nav">
+                <button type="button" data-open="curtain">開啟</button>
+                <button type="button" class="secondary" data-copy="curtain">複製連結</button>
               </div>
             </div>
             <div class="quick-link-row">
               <span>簽名頁</span>
               <div class="control-actions nav">
-                <button type="button" data-open="/sign">開啟</button>
-                <button type="button" class="secondary" data-copy="/sign">複製連結</button>
+                <button type="button" data-open="sign">開啟</button>
+                <button type="button" class="secondary" data-copy="sign">複製連結</button>
               </div>
             </div>
           </div>
@@ -66,7 +73,8 @@
             <div class="state-row"><span>Status</span><strong id="stateStatus">-</strong></div>
             <div class="state-row"><span>Sequence</span><strong id="stateSequence">-</strong></div>
             <div class="state-row"><span>Last Updated</span><strong id="stateUpdated">-</strong></div>
-            <div class="state-row"><span>Connected Displays</span><strong id="stateClients">-</strong></div>
+            <div class="state-row"><span>Connected Walls</span><strong id="stateClients">-</strong></div>
+            <div class="state-row"><span>Connected iPads</span><strong id="stateSigners">-</strong></div>
             <div class="state-row"><span>Stored Signatures</span><strong id="stateSignatureCount">-</strong></div>
             <div class="state-row"><span>Auto Return</span><strong id="stateDuration">-</strong></div>
             <div class="state-row"><span>Has Replay</span><strong id="stateReplay">-</strong></div>
@@ -151,6 +159,10 @@
               <path id="previewPath"></path>
             </svg>
           </div>
+          <div class="control-actions nav">
+            <button type="button" id="exportButton">匯出全部簽名（ZIP）</button>
+          </div>
+          <p class="toast" id="exportToast">每位醫師一張 PNG（白底）＋一個 SVG（透明向量），附 index.csv 對照表與原始 signatures.json。</p>
           <div class="signature-list" id="signatureList" aria-label="保留簽名列表"></div>
         </section>
       </div>
@@ -159,6 +171,7 @@
 
   <script type="module">
     import { connectEvents, controlHeaders, formatTime, postCue, setDot, signatureToPath } from "/assets/shared.js";
+    import { buildSignatureExport } from "/assets/export.js";
 
     const connectionDot = document.querySelector("#connectionDot");
     const connectionText = document.querySelector("#connectionText");
@@ -167,6 +180,7 @@
     const stateSequence = document.querySelector("#stateSequence");
     const stateUpdated = document.querySelector("#stateUpdated");
     const stateClients = document.querySelector("#stateClients");
+    const stateSigners = document.querySelector("#stateSigners");
     const stateSignatureCount = document.querySelector("#stateSignatureCount");
     const stateDuration = document.querySelector("#stateDuration");
     const stateReplay = document.querySelector("#stateReplay");
@@ -183,16 +197,78 @@
     const previewPath = document.querySelector("#previewPath");
     const signatureList = document.querySelector("#signatureList");
     const linkToast = document.querySelector("#linkToast");
+    let links = null;
+    let signaturesVersion = null;
+    let signatureListRequest = 0;
+    const exportButton = document.querySelector("#exportButton");
+    const exportToast = document.querySelector("#exportToast");
+
+    exportButton.addEventListener("click", async () => {
+      exportButton.disabled = true;
+      exportToast.textContent = "匯出中...";
+      try {
+        const response = await fetch("/api/signatures", { headers: controlHeaders() });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `request failed: ${response.status}`);
+        if (payload.signatures.length === 0) {
+          exportToast.textContent = "目前沒有簽名可以匯出。";
+          return;
+        }
+        const { blob, fileName } = await buildSignatureExport(payload.signatures, {
+          onProgress(done, total) {
+            exportToast.textContent = `匯出中... ${done}/${total}`;
+          }
+        });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        exportToast.textContent = `已匯出 ${payload.signatures.length} 筆簽名：${fileName}`;
+      } catch (error) {
+        exportToast.textContent = `匯出失敗：${error.message}`;
+      } finally {
+        exportButton.disabled = false;
+      }
+    });
+
+    // Page links come from the server so they carry the staff / sign token.
+    async function loadLinks() {
+      try {
+        const response = await fetch("/api/links", { headers: controlHeaders() });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `request failed: ${response.status}`);
+        links = payload.links;
+      } catch (error) {
+        linkToast.textContent = `無法取得連結：${error.message}`;
+      }
+    }
+
+    function linkUrl(key) {
+      return links?.[key] ? new URL(links[key], location.origin).toString() : "";
+    }
 
     for (const button of document.querySelectorAll("[data-open]")) {
       button.addEventListener("click", () => {
-        window.open(new URL(button.dataset.open, location.origin).toString(), "_blank", "noopener");
+        const url = linkUrl(button.dataset.open);
+        if (!url) {
+          linkToast.textContent = "連結尚未載入：請用 /control?token=... 開啟控制台";
+          return;
+        }
+        window.open(url, "_blank", "noopener");
       });
     }
 
     for (const button of document.querySelectorAll("[data-copy]")) {
       button.addEventListener("click", async () => {
-        const url = new URL(button.dataset.copy, location.origin).toString();
+        const url = linkUrl(button.dataset.copy);
+        if (!url) {
+          linkToast.textContent = "連結尚未載入：請用 /control?token=... 開啟控制台";
+          return;
+        }
         try {
           await navigator.clipboard.writeText(url);
           linkToast.textContent = `已複製：${url}`;
@@ -211,7 +287,7 @@
     };
 
     const confirmMap = {
-      clearAllButton: "確定要清空「全部」保留簽名？此操作會立刻覆寫存檔，無法復原。",
+      clearAllButton: "確定要清空「全部」保留簽名？牆面會立刻清空；原資料會先備份到 data/signatures-cleared-*.json。",
       blackoutButton: "確定要把牆面切到 Blackout？"
     };
 
@@ -369,11 +445,14 @@
       stateStatus.textContent = state.status || "-";
       stateSequence.textContent = String(state.sequence ?? "-");
       stateUpdated.textContent = formatTime(state.lastUpdated);
-      stateClients.textContent = String(state.connectedDisplays ?? "-");
-      stateSignatureCount.textContent = String(state.signatureCount ?? state.signatures?.length ?? 0);
+      renderConnections(state);
+      stateSignatureCount.textContent = String(state.signatureCount ?? 0);
       stateDuration.textContent = state.displayDurationMs ? `${(state.displayDurationMs / 1000).toFixed(1)}s` : "-";
       stateReplay.textContent = state.hasLastSignature ? "Yes" : "No";
-      renderSignatureList(state.signatures || []);
+      if (state.signaturesVersion !== signaturesVersion) {
+        signaturesVersion = state.signaturesVersion;
+        loadSignatureList();
+      }
 
       const signature = state.currentSignature;
       if (!signature) {
@@ -386,6 +465,26 @@
       previewPath.setAttribute("d", signatureToPath(signature));
       previewSvg.style.display = "block";
       previewEmpty.style.display = "none";
+    }
+
+    function renderConnections(counts) {
+      if (!counts) return;
+      stateClients.textContent = String(counts.connectedDisplays ?? "-");
+      stateSigners.textContent = String(counts.connectedSigners ?? "-");
+    }
+
+    // Broadcasts only carry the newest signatures; the full list is fetched
+    // when the server says it changed. Older responses are dropped.
+    async function loadSignatureList() {
+      const request = ++signatureListRequest;
+      try {
+        const response = await fetch("/api/signatures", { headers: controlHeaders() });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `request failed: ${response.status}`);
+        if (request === signatureListRequest) renderSignatureList(payload.signatures);
+      } catch (error) {
+        toast.textContent = `無法載入簽名列表：${error.message}`;
+      }
     }
 
     function renderSignatureList(signatures) {
@@ -439,18 +538,26 @@
     }
 
     async function loadState() {
-      const response = await fetch("/api/state");
+      const response = await fetch("/api/state", { headers: controlHeaders() });
+      if (!response.ok) {
+        toast.textContent = response.status === 403
+          ? "需要控制台 token：請用 /control?token=... 開啟這頁"
+          : `讀取狀態失敗：HTTP ${response.status}`;
+        return;
+      }
       renderState(await response.json());
     }
 
-    connectEvents({
+    connectEvents("control", {
       connection(connected) {
         setDot(connectionDot, connected);
         connectionText.textContent = connected ? "已連線" : "連線中斷";
       },
+      clients: renderConnections,
       state: renderState,
       "signature:submitted": renderState,
       "signature:removed": renderState,
+      "signature:live-clear": renderState,
       "lighting:config": renderState,
       "cue:reset": renderState,
       "cue:idle": renderState,
@@ -460,6 +567,7 @@
     });
 
     loadState();
+    loadLinks();
   </script>
 </body>
 </html>

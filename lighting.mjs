@@ -158,6 +158,17 @@ function mergeConfig(base, patch = {}) {
   return next;
 }
 
+// Stream mode writes parCount fixtures from dmxStart; anything past channel
+// 512 would silently fall off the universe, so refuse it instead.
+function dmxOverrun(config) {
+  if (config.mode !== "artnet-stream") return "";
+  const { dmxStart, parCount, profile } = config.artnet;
+  const channels = FIXTURE_PROFILES[profile].channels;
+  const lastChannel = dmxStart - 1 + parCount * channels;
+  if (lastChannel <= 512) return "";
+  return `DMX 超出 512 channel：起始 ${dmxStart} + ${parCount} 盞 × ${channels}ch，最後一個 channel 是 ${lastChannel}`;
+}
+
 export function createLightingBridge(options = {}) {
   const env = options.env || process.env;
   const log = options.log || ((...args) => console.log("[lighting]", ...args));
@@ -168,7 +179,7 @@ export function createLightingBridge(options = {}) {
   let currentCue = "idle";
   let cueStartedAt = Date.now();
   let cueDurationMs = 0;
-  let lastError = "";
+  let lastError = dmxOverrun(config);
   let packetsSent = 0;
 
   function ensureSocket() {
@@ -307,7 +318,10 @@ export function createLightingBridge(options = {}) {
   }
 
   function configure(patch) {
-    config = mergeConfig(config, patch);
+    const next = mergeConfig(config, patch);
+    const overrun = dmxOverrun(next);
+    if (overrun) throw new Error(overrun);
+    config = next;
     lastError = "";
     restartTicker();
     // Re-assert the current cue so the new target hears about it right away.

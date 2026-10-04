@@ -46,12 +46,19 @@
     const connectionDot = document.querySelector("#connectionDot");
     const connectionText = document.querySelector("#connectionText");
 
+    // id|activeSince of the signature being drawn: unrelated broadcasts
+    // (e.g. another signature deleted) must not restart the animation.
+    let shownKey = "";
+
     function renderSignature(state) {
       const signature = state?.currentSignature;
       if (!signature) {
         clearSignature(state?.status || "idle");
         return;
       }
+      const key = `${signature.id}|${state.activeSince}`;
+      if (key === shownKey) return;
+      shownKey = key;
       wallStage.classList.remove("blackout");
       const d = signatureToPath(signature);
       signaturePath.setAttribute("d", d);
@@ -66,6 +73,7 @@
     }
 
     function clearSignature(nextStatus = "idle") {
+      shownKey = "";
       signaturePath.removeAttribute("d");
       signatureSvg.classList.remove("draw");
       emptyState.style.display = nextStatus === "blackout" ? "none" : "block";
@@ -74,16 +82,21 @@
       signatureMeta.textContent = "No signature loaded";
     }
 
-    connectEvents({
+    // This page only shows finished signatures; live frames are ignored.
+    connectEvents("wall", {
       connection(connected) {
         setDot(connectionDot, connected);
         connectionText.textContent = connected ? "已連線" : "連線中斷";
       },
       state: renderSignature,
       "signature:submitted": renderSignature,
-      "cue:reset": (state) => clearSignature(state?.status),
-      "cue:idle": (state) => clearSignature(state?.status),
-      "cue:blackout": (state) => clearSignature(state?.status)
+      "signature:removed": renderSignature,
+      "signature:live-clear": renderSignature,
+      "cue:reset": renderSignature,
+      "cue:idle": renderSignature,
+      "cue:auto-idle": renderSignature,
+      "cue:blackout": renderSignature,
+      "cue:clear-signatures": renderSignature
     });
   </script>
 </body>

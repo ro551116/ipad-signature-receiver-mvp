@@ -18,23 +18,55 @@ export function signatureToStrokePaths(signature, width = 1000, height = 500) {
   return signature.strokes.map((stroke) => strokeToPath(stroke, width, height));
 }
 
-export function connectEvents(handlers = {}) {
-  const source = new EventSource("/events");
+// The server pings every 15s; if nothing arrives for this long the
+// connection is assumed dead (e.g. venue Wi-Fi dropped silently) and reopened.
+const silenceLimitMs = 40000;
+
+// role: "wall" | "control" | "sign". Walls and the console need the staff
+// token; the iPad uses the sign token and only receives liveness events.
+export function connectEvents(role, handlers = {}) {
   const setConnection = handlers.connection || (() => {});
-  source.onopen = () => setConnection(true);
-  source.onerror = () => setConnection(false);
-  for (const [event, handler] of Object.entries(handlers)) {
-    if (event !== "connection") {
+  const token = role === "sign" ? signToken() : controlToken();
+  const query = new URLSearchParams({ role });
+  if (token) query.set("token", token);
+  const url = `/events?${query}`;
+  let source = null;
+  let watchdog = null;
+
+  function armWatchdog() {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      setConnection(false);
+      open();
+    }, silenceLimitMs);
+  }
+
+  function open() {
+    source?.close();
+    source = new EventSource(url);
+    source.onopen = () => {
+      setConnection(true);
+      armWatchdog();
+    };
+    source.onerror = () => setConnection(false);
+    source.addEventListener("ping", armWatchdog);
+    for (const [event, handler] of Object.entries(handlers)) {
+      if (event === "connection") continue;
       source.addEventListener(event, (message) => {
+        armWatchdog();
+        let data = null;
         try {
-          handler(JSON.parse(message.data));
-        } catch {
-          handler(null);
-        }
+          data = JSON.parse(message.data);
+        } catch {}
+        handler(data);
       });
     }
+    // Covers a refused connection (403) too: EventSource gives up on non-200
+    // responses, the watchdog keeps retrying.
+    armWatchdog();
   }
-  return source;
+
+  open();
 }
 
 export async function postCue(path, headers = {}) {
@@ -46,22 +78,31 @@ export async function postCue(path, headers = {}) {
   return payload;
 }
 
-// Control pages pass ?token=... once; it sticks for the session and is sent
-// as X-Control-Token on show-control requests (CONTROL_TOKEN on the server).
-export function controlHeaders() {
+// Staff pages (/control, /wall, /medical-wall) are opened once with
+// ?token=...; it sticks for the tab session and is sent as X-Control-Token
+// (CONTROL_TOKEN on the server). The iPad sign page does the same with
+// SIGN_TOKEN. Use the console's Quick Links: they carry the right token.
+function pageToken(storageKey) {
   const fromUrl = new URLSearchParams(location.search).get("token");
-  if (fromUrl) sessionStorage.setItem("controlToken", fromUrl);
-  const token = fromUrl || sessionStorage.getItem("controlToken") || "";
+  if (fromUrl) sessionStorage.setItem(storageKey, fromUrl);
+  return fromUrl || sessionStorage.getItem(storageKey) || "";
+}
+
+export function controlToken() {
+  return pageToken("controlToken");
+}
+
+export function signToken() {
+  return pageToken("signToken");
+}
+
+export function controlHeaders() {
+  const token = controlToken();
   return token ? { "X-Control-Token": token } : {};
 }
 
-// Same pattern for the iPad sign page: open /sign?token=... once so the
-// device sends X-Sign-Token on every signing request (SIGN_TOKEN on the
-// server). No-op (empty headers) if SIGN_TOKEN isn't configured server-side.
 export function signHeaders() {
-  const fromUrl = new URLSearchParams(location.search).get("token");
-  if (fromUrl) sessionStorage.setItem("signToken", fromUrl);
-  const token = fromUrl || sessionStorage.getItem("signToken") || "";
+  const token = signToken();
   return token ? { "X-Sign-Token": token } : {};
 }
 

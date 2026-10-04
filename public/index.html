@@ -27,7 +27,7 @@
           <p class="lead">這版先驗證最重要的一段：iPad 簽名、電腦接收、牆面即時顯示。TouchDesigner 和燈光先不接，等這段穩定後再往後串。</p>
           <div class="url-box">
             <strong>使用方式</strong>
-            <p>電腦和 iPad 連同一個 Wi-Fi。電腦開 <code>/wall</code> 全螢幕，iPad 開 <code>/sign</code> 簽名，工作人員用 <code>/control</code> reset 或 replay。</p>
+            <p>電腦和 iPad 連同一個 Wi-Fi。工作人員先開 <code>/control?token=…</code>，再用控制台的 Quick Links 開電視牆（<code>/medical-wall</code>）與 iPad 簽名頁（<code>/sign</code>）：連結已帶好 token。</p>
           </div>
         </section>
 
@@ -55,6 +55,14 @@
               <p>依 2026-05-25 醫師迎賓空間：待機背板動畫、簽名展示、程式極光、多位醫師簽名保留。</p>
             </span>
             <strong>Open /medical-wall</strong>
+          </a>
+          <a class="launch-card" href="/curtain">
+            <span>
+              <small>Projection</small>
+              <h2>黑布簾投影</h2>
+              <p>入口黑布簾：Nordberg Medical logo、醫師簽名、Welcome，黑底投影。</p>
+            </span>
+            <strong>Open /curtain</strong>
           </a>
           <a class="launch-card" href="/control">
             <span>

@@ -60,10 +60,10 @@ Recommended production timing:
 |---|---:|---|
 | Idle | indefinite | animated standby backplate with retained signature cards |
 | Signature received | immediate | latest submitted iPad stroke becomes the main signature reveal |
-| Aurora effect | 1.5-8.5s | programmatic cyan / teal / green aurora intensifies behind the signature |
-| Auto return | about 9.5s | large signature clears and wall returns to standby backplate |
+| Aurora effect | 0-7.8s | generated aurora video (canvas fallback) plays behind the signature for the whole display window |
+| Auto return | about 7.8s (`DISPLAY_DURATION_MS`) | large signature clears and wall returns to standby backplate |
 | Reset | operator-controlled | return to standby backplate immediately; retained signatures stay available in control |
-| Clear all | explicit operator action | remove all retained signatures |
+| Clear all | explicit operator action | remove all retained signatures (a backup is written to `data/signatures-cleared-*.json` first) |
 
 ## Privacy / Content Note
 
@@ -72,21 +72,14 @@ The previous animation direction explicitly avoided readable text and readable s
 - `exact`: show the real submitted signature
 - `abstract`: preserve gesture feel but stylize the mark so it is not a readable legal signature
 - do not persist raw signatures unless the event copy says so
-- MVP keeps stroke data in memory only; production needs retention and deletion policy
+- signatures persist in `data/signatures.json` and every endpoint that returns strokes needs the staff token; production still needs a retention and deletion policy agreed with the client
 
 ## Next Build Step
 
-After `/medical-wall` is accepted:
+Done since this note was written: persistent signature store, lighting bridge (OSC / Art-Net, see README), and the client logo (Nordberg Medical, for "The First Light" event) in the marquee centre band and under the final signature.
+
+Still open:
 
 1. Add a `privacyMode` option: `exact` vs `abstract`.
-2. Add a persistent local store if signatures must survive server restart.
-3. Rework the visual layer against the actual main visual once provided.
-4. Add a cue scheduler so `signature:submitted` emits timed states:
-   - `signature_draw`
-   - `aurora_bloom`
-   - `auto_idle`
-5. Add optional lighting bridge later:
-   - `/doctorWelcome/signatureReceived`
-   - `/doctorWelcome/auroraStart`
-   - `/doctorWelcome/parActivate`
-6. Add rehearsal checklist for actual venue network, display resolution, browser fullscreen mode, and later PAR control path.
+2. Rework the rest of the visual layer against the actual main visual once provided.
+3. Add rehearsal checklist for actual venue network, display resolution, browser fullscreen mode, and the PAR control path.

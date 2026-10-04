@@ -3,16 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>iPad 簽名端</title>
+  <title>醫師簽名</title>
   <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
   <div class="app-shell sign-layout">
     <header class="topbar">
-      <a class="brand" href="/">
-        <strong>iPad 簽名端</strong>
-        <span>落筆即同步到前方電視牆。</span>
-      </a>
+      <img class="sign-logo" src="/assets/nordberg-medical-logo-dark.png" alt="Nordberg Medical">
       <div class="status-pill" aria-live="polite">
         <span class="status-dot" id="connectionDot"></span>
         <span id="connectionText">連線中</span>
@@ -28,6 +25,7 @@
           </div>
           <div class="signature-header-actions">
             <span class="status-pill"><span id="pointCount">0</span> points</span>
+            <button type="button" class="primary" id="retryButton" hidden>重送</button>
             <button type="button" class="secondary" id="clearButton">清除</button>
           </div>
         </header>
@@ -47,6 +45,7 @@
     const ctx = canvas.getContext("2d");
     const placeholder = document.querySelector("#placeholder");
     const clearButton = document.querySelector("#clearButton");
+    const retryButton = document.querySelector("#retryButton");
     const message = document.querySelector("#message");
     const pointCount = document.querySelector("#pointCount");
     const connectionDot = document.querySelector("#connectionDot");
@@ -61,8 +60,16 @@
     let liveRequestInFlight = false;
     let liveAbortController = null;
     let finalizeTimer = null;
+    // While a finished signature is being delivered the canvas is locked: a new
+    // pen-down can neither merge into it nor be wiped by the success reset.
     let finalizing = false;
+    let delivering = false;
+    let pendingSubmission = "";
+    // Bumped by 清除 so an abandoned delivery loop stops touching the page.
+    let submitGeneration = 0;
     const autoFinalizeDelayMs = 1300;
+    const submitTimeoutMs = 8000;
+    const retryDelaysMs = [1000, 2000, 4000, 8000];
 
     function resizeCanvas() {
       const rect = canvas.getBoundingClientRect();
@@ -75,14 +82,19 @@
       redraw();
     }
 
+    function round(value, digits) {
+      const factor = 10 ** digits;
+      return Math.round(value * factor) / factor;
+    }
+
     function getPoint(event) {
       const rect = canvas.getBoundingClientRect();
       const x = (event.clientX - rect.left) / rect.width;
       const y = (event.clientY - rect.top) / rect.height;
       return {
-        x: Math.min(1, Math.max(0, x)),
-        y: Math.min(1, Math.max(0, y)),
-        p: event.pressure || 0.5
+        x: round(Math.min(1, Math.max(0, x)), 4),
+        y: round(Math.min(1, Math.max(0, y)), 4),
+        p: round(event.pressure || 0.5, 2)
       };
     }
 
@@ -106,13 +118,14 @@
       const rect = canvas.getBoundingClientRect();
       ctx.clearRect(0, 0, rect.width, rect.height);
       for (const stroke of strokes) drawStroke(stroke);
-      const points = strokes.reduce((sum, stroke) => sum + stroke.length, 0);
+      const points = totalPoints();
       pointCount.textContent = String(points);
       placeholder.style.display = points > 0 ? "none" : "grid";
     }
 
     canvas.addEventListener("pointerdown", (event) => {
       event.preventDefault();
+      if (finalizing) return;
       cancelAutoFinalize();
       ensureLiveSignatureId();
       drawing = true;
@@ -147,13 +160,21 @@
     clearButton.addEventListener("click", () => {
       cancelAutoFinalize();
       cancelLiveFlush();
+      submitGeneration += 1;
+      finalizing = false;
+      pendingSubmission = "";
+      retryButton.hidden = true;
       strokes = [];
       activeStroke = null;
-      finalizing = false;
+      drawing = false;
       clearLiveSignature();
       liveSignatureId = "";
       message.textContent = "已清除，可以重新簽名。";
       redraw();
+    });
+
+    retryButton.addEventListener("click", () => {
+      if (pendingSubmission) deliver();
     });
 
     function ensureLiveSignatureId() {
@@ -179,6 +200,11 @@
           userAgent: navigator.userAgent
         }
       };
+    }
+
+    function describeError(status, error) {
+      if (status === 403) return "這台 iPad 沒有簽名權限，請用控制台的簽名頁連結重新開啟";
+      return error || `HTTP ${status}`;
     }
 
     function pushLiveSignature(immediate = false) {
@@ -220,14 +246,19 @@
       liveRequestInFlight = true;
       liveAbortController = new AbortController();
       try {
-        await fetch("/api/live-signature", {
+        const response = await fetch("/api/live-signature", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...signHeaders() },
           body: JSON.stringify(makePayload()),
           signal: liveAbortController.signal
         });
-        if (!drawing) message.textContent = "停筆中，準備自動完成...";
-        else message.textContent = "正在同步到電視牆...";
+        // 409: this signature was already submitted; the frame is just late.
+        if (response.ok) {
+          message.textContent = drawing ? "正在同步到電視牆..." : "停筆中，準備自動完成...";
+        } else if (response.status !== 409) {
+          const payload = await response.json().catch(() => ({}));
+          message.textContent = `同步失敗：${describeError(response.status, payload.error)}`;
+        }
       } catch (error) {
         if (error.name !== "AbortError") {
           message.textContent = `同步中斷：${error.message}`;
@@ -252,28 +283,68 @@
       }
     }
 
-    async function finalizeSignature() {
+    function finalizeSignature() {
       if (finalizing || totalPoints() < 2) return;
       finalizing = true;
       cancelLiveFlush();
-      message.textContent = "已完成，正在播放上牆動畫...";
+      pendingSubmission = JSON.stringify(makePayload());
+      deliver();
+    }
+
+    // The server stores a signature id once, so re-sending after a lost
+    // response or a timeout is safe.
+    async function deliver() {
+      if (delivering) return;
+      delivering = true;
+      const generation = submitGeneration;
+      retryButton.hidden = true;
+      try {
+        for (let attempt = 0; ; attempt += 1) {
+          message.textContent = attempt === 0 ? "已完成，正在送到電視牆..." : `重新送出中（第 ${attempt} 次重試）...`;
+          const result = await submitOnce(pendingSubmission);
+          if (generation !== submitGeneration) return;
+          if (result.ok) {
+            message.textContent = "已完成，下一位可以簽名。";
+            strokes = [];
+            activeStroke = null;
+            liveSignatureId = "";
+            pendingSubmission = "";
+            finalizing = false;
+            redraw();
+            return;
+          }
+          const delay = retryDelaysMs[attempt];
+          if (!result.retryable || delay === undefined) {
+            message.textContent = `送出失敗：${result.error}。請按「重送」，或通知工作人員。`;
+            retryButton.hidden = false;
+            return;
+          }
+          message.textContent = `送出失敗（${result.error}），${delay / 1000} 秒後自動重試...`;
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          if (generation !== submitGeneration) return;
+        }
+      } finally {
+        delivering = false;
+      }
+    }
+
+    async function submitOnce(body) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), submitTimeoutMs);
       try {
         const response = await fetch("/api/signatures", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...signHeaders() },
-          body: JSON.stringify(makePayload())
+          body,
+          signal: controller.signal
         });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || "send failed");
-        message.textContent = `已完成 ${payload.signatureId}，下一位可簽名。`;
-        strokes = [];
-        activeStroke = null;
-        liveSignatureId = "";
+        if (response.ok) return { ok: true };
+        const payload = await response.json().catch(() => ({}));
+        return { ok: false, retryable: response.status >= 500, error: describeError(response.status, payload.error) };
       } catch (error) {
-        message.textContent = `自動完成失敗：${error.message}`;
+        return { ok: false, retryable: true, error: error.name === "AbortError" ? "連線逾時" : "網路中斷" };
       } finally {
-        finalizing = false;
-        redraw();
+        clearTimeout(timer);
       }
     }
 
@@ -285,11 +356,12 @@
       }
     }
 
-    connectEvents({
+    connectEvents("sign", {
       connection(connected) {
         setDot(connectionDot, connected);
         connectionText.textContent = connected ? "已連線" : "連線中斷";
-      }
+      },
+      hello() {}
     });
 
     window.addEventListener("resize", resizeCanvas);

@@ -10,21 +10,29 @@ import { createSignatureStore } from "./store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
-const dataDir = path.join(__dirname, "data");
+const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
 const lightingConfigPath = path.join(dataDir, "lighting-config.json");
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || "0.0.0.0";
-const maxSignatures = Number(process.env.MAX_SIGNATURES || 80);
+// Once this many signatures are stored, new ones are refused with an error the
+// iPad shows — stored signatures are never dropped to make room.
+const maxSignatures = Number(process.env.MAX_SIGNATURES || 1000);
+// Displays only draw the newest few in the marquee; the full list is staff-only
+// via GET /api/signatures, so broadcasts stay small as the event goes on.
+const recentSignatureLimit = 24;
+// Lets walls notice a silently dead connection (venue Wi-Fi) and reconnect.
+const heartbeatMs = 15000;
 // Kept at/under the aurora video's natural length (8s, public/assets/aurora-final.mp4)
 // so the video is still playing — not frozen on its last frame — when the
 // exit fade begins. If the video file changes length, adjust this too.
 const displayDurationMs = Number(process.env.DISPLAY_DURATION_MS || 7800);
-// Show-control endpoints (cues, deletes, lighting) require this token when
-// set. Set it before any real event: guests share the venue Wi-Fi with this
-// server. Without a token, control is only left open on a loopback bind
+// Staff token: show-control endpoints (cues, deletes, lighting) and every
+// endpoint that returns signature strokes (walls, control console) require it.
+// Set it before any real event: guests share the venue Wi-Fi with this
+// server. Without a token, staff access is only left open on a loopback bind
 // (127.0.0.1/localhost) or when explicitly opted into via
 // ALLOW_UNSAFE_NO_CONTROL_TOKEN — anything else (e.g. the default 0.0.0.0)
-// rejects control requests rather than failing open.
+// rejects those requests rather than failing open.
 let controlToken = process.env.CONTROL_TOKEN || "";
 const allowUnsafeNoToken = process.env.ALLOW_UNSAFE_NO_CONTROL_TOKEN === "1";
 const isLoopbackHost = host === "127.0.0.1" || host === "localhost" || host === "::1";
@@ -38,14 +46,24 @@ const controlTokenFile = path.join(dataDir, "control-token");
 // can sign). Set SIGN_TOKEN to require iPads to present X-Sign-Token.
 const signToken = process.env.SIGN_TOKEN || "";
 
-function isAuthorized(req) {
-  if (controlToken) return req.headers["x-control-token"] === controlToken;
+const STAFF_ROLES = new Set(["wall", "control"]);
+const WALL_ROLES = new Set(["wall"]);
+const CONTROL_ROLES = new Set(["control"]);
+const EVENT_ROLES = new Set(["wall", "control", "sign"]);
+
+// EventSource cannot send headers, so the token may also arrive as ?token=.
+function presentedToken(req, url, header) {
+  return req.headers[header] || url.searchParams.get("token") || "";
+}
+
+function isStaff(req, url) {
+  if (controlToken) return presentedToken(req, url, "x-control-token") === controlToken;
   return isLoopbackHost || allowUnsafeNoToken;
 }
 
-function isSignerAuthorized(req) {
+function isSigner(req, url) {
   if (!signToken) return true;
-  return req.headers["x-sign-token"] === signToken;
+  return presentedToken(req, url, "x-sign-token") === signToken;
 }
 
 function loadSavedControlToken() {
@@ -69,7 +87,7 @@ function promptControlToken(defaultToken) {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const hint = defaultToken ? " (Enter to reuse the saved token)" : "";
-    rl.question(`Set CONTROL_TOKEN for /control${hint}: `, (answer) => {
+    rl.question(`Set CONTROL_TOKEN for /control and the walls${hint}: `, (answer) => {
       rl.close();
       resolve(answer.trim() || defaultToken);
     });
@@ -116,11 +134,23 @@ async function saveLightingConfig(config) {
 const lighting = createLightingBridge({ initialConfig: loadLightingConfig() });
 const store = createSignatureStore({ dataDir });
 
-const clients = new Set();
-const signatures = store.load();
+const clients = new Map(); // SSE response -> role (wall | control | sign)
+const stored = store.load();
+const signatures = stored.signatures;
+let nextDoctorNumber = stored.nextDoctorNumber;
+// Ids that already went through final submission. Late live frames for them
+// are refused (they would pull the wall back into live mode), and a retried
+// submission is acknowledged without storing or replaying it twice.
+const submittedIds = new Set(signatures.map((signature) => signature.id));
+// Seeded per boot so a wall that reconnects after a server restart never
+// mistakes a new list for the one it already drew.
+let signaturesVersion = Date.now();
 let liveSignature = null;
 let lastSignature = null;
 let currentSignature = null;
+// Server time (ms) when currentSignature's display window began. Walls time
+// the reveal/exit from this plus serverNow, never from their own clock alone.
+let activeSince = null;
 let status = "idle";
 let sequence = 0;
 let lastUpdated = new Date().toISOString();
@@ -150,29 +180,49 @@ function json(res, code, payload) {
   res.end(body);
 }
 
-function currentState() {
+function countClients(role) {
+  let count = 0;
+  for (const clientRole of clients.values()) if (clientRole === role) count += 1;
+  return count;
+}
+
+function connectionCounts() {
+  return { connectedDisplays: countClients("wall"), connectedSigners: countClients("sign") };
+}
+
+// What walls and the control console get. Only the newest signatures ride
+// along (the marquee); the console fetches the full list when
+// signaturesVersion changes.
+function displayState() {
   return {
     status,
     sequence,
     lastUpdated,
+    serverNow: Date.now(),
+    activeSince,
     liveSignature,
     currentSignature,
-    signatures,
+    recentSignatures: signatures.slice(-recentSignatureLimit),
     signatureCount: signatures.length,
+    signaturesVersion,
     displayDurationMs,
     hasLastSignature: Boolean(lastSignature),
-    connectedDisplays: clients.size,
+    ...connectionCounts(),
     lighting: lighting.state()
   };
 }
 
-function broadcast(event, payload) {
-  const data = JSON.stringify(payload);
-  for (const res of clients) {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${data}\n\n`);
+function broadcast(event, payload, roles = STAFF_ROLES) {
+  const message = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const [res, role] of clients) {
+    if (roles.has(role)) res.write(message);
   }
 }
+
+const heartbeat = setInterval(() => {
+  for (const res of clients.keys()) res.write("event: ping\ndata: {}\n\n");
+}, heartbeatMs);
+heartbeat.unref();
 
 function touch() {
   sequence += 1;
@@ -182,6 +232,15 @@ function touch() {
 function touchStatus(nextStatus) {
   status = nextStatus;
   touch();
+}
+
+function doctorLabel(number) {
+  return `醫師 ${String(number).padStart(2, "0")}`;
+}
+
+function signaturesChanged() {
+  signaturesVersion += 1;
+  store.save({ signatures, nextDoctorNumber });
 }
 
 function clearReturnTimer() {
@@ -195,12 +254,36 @@ function scheduleReturnToIdle(signatureId) {
   clearReturnTimer();
   returnTimer = setTimeout(() => {
     if (currentSignature?.id !== signatureId) return;
-    currentSignature = null;
-    touchStatus("idle");
-    lighting.trigger("idle", { reason: "auto-idle" });
-    const state = currentState();
-    broadcast("cue:auto-idle", state);
+    stopShow("idle", "auto-idle", "cue:auto-idle");
   }, displayDurationMs);
+}
+
+function startDisplay(signature, nextStatus, reason) {
+  liveSignature = null;
+  lastSignature = signature;
+  currentSignature = signature;
+  activeSince = Date.now();
+  touchStatus(nextStatus);
+  lighting.trigger("final", { reason, durationMs: displayDurationMs });
+  broadcast("signature:submitted", displayState());
+  scheduleReturnToIdle(signature.id);
+}
+
+function stopShow(nextStatus, reason, event) {
+  clearReturnTimer();
+  liveSignature = null;
+  currentSignature = null;
+  activeSince = null;
+  touchStatus(nextStatus);
+  lighting.trigger(nextStatus === "blackout" ? "blackout" : "idle", { reason });
+  const state = displayState();
+  broadcast(event, state);
+  return state;
+}
+
+function round(value, digits) {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
 }
 
 function sanitizeSignature(input) {
@@ -212,13 +295,17 @@ function sanitizeSignature(input) {
     throw new Error("signature payload requires at least one stroke");
   }
 
+  // 4 decimals is 0.1 px on a 1000 px wide wall: far finer than any display,
+  // and roughly halves the bytes of every live frame and stored signature.
   const strokes = input.strokes.slice(0, 120).map((stroke) => {
     if (!Array.isArray(stroke)) return [];
-    return stroke.slice(0, 1200).map((point) => ({
-      x: clamp(Number(point.x), 0, 1),
-      y: clamp(Number(point.y), 0, 1),
-      p: clamp(Number(point.p ?? 0.5), 0, 1)
-    })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+    return stroke.slice(0, 1200)
+      .filter((point) => Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y)))
+      .map((point) => ({
+        x: round(clamp(Number(point.x), 0, 1), 4),
+        y: round(clamp(Number(point.y), 0, 1), 4),
+        p: round(clamp(Number(point.p ?? 0.5), 0, 1), 2)
+      }));
   }).filter((stroke) => stroke.length > 0);
 
   if (strokes.length === 0) {
@@ -288,6 +375,7 @@ async function serveStatic(req, res, pathname) {
     ["/sign", "/sign.html"],
     ["/wall", "/wall.html"],
     ["/medical-wall", "/medical-wall.html"],
+    ["/curtain", "/curtain.html"],
     ["/control", "/control.html"]
   ]);
 
@@ -355,12 +443,44 @@ function pipeFile(filePath, res, options) {
   stream.pipe(res);
 }
 
+// Walls and the console get the show state; the iPad only gets connection
+// liveness (hello + ping) — never other doctors' strokes.
+function openEventStream(req, res, url) {
+  const role = url.searchParams.get("role") || "";
+  if (!EVENT_ROLES.has(role)) {
+    json(res, 400, { ok: false, error: "role must be one of: wall, control, sign" });
+    return;
+  }
+  const allowed = role === "sign" ? isSigner(req, url) : isStaff(req, url);
+  if (!allowed) {
+    json(res, 403, { ok: false, error: "forbidden: missing or wrong token" });
+    return;
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no"
+  });
+  res.write("retry: 1000\n\n");
+  clients.set(res, role);
+  if (role === "sign") res.write(`event: hello\ndata: ${JSON.stringify({ role })}\n\n`);
+  else res.write(`event: state\ndata: ${JSON.stringify(displayState())}\n\n`);
+  broadcast("clients", connectionCounts(), CONTROL_ROLES);
+
+  req.on("close", () => {
+    clients.delete(res);
+    broadcast("clients", connectionCounts(), CONTROL_ROLES);
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const pathname = url.pathname;
 
-  // Show control is gated; signing (POST /api/signatures, /api/live-signature)
-  // and read-only display endpoints stay open.
+  // Show control is gated, and so is anything that returns signature strokes.
+  // Signing (POST /api/signatures, /api/live-signature) has its own token.
   const isControlRequest =
     (req.method === "POST" && (
       pathname.startsWith("/api/cue/") ||
@@ -368,8 +488,11 @@ const server = http.createServer(async (req, res) => {
       pathname === "/api/lighting/cue"
     )) ||
     (req.method === "DELETE" && pathname.startsWith("/api/signatures/"));
+  const isStaffRead =
+    req.method === "GET" &&
+    (pathname === "/api/state" || pathname === "/api/signatures" || pathname === "/api/links");
 
-  if (isControlRequest && !isAuthorized(req)) {
+  if ((isControlRequest || isStaffRead) && !isStaff(req, url)) {
     json(res, 403, { ok: false, error: "forbidden: missing or wrong X-Control-Token" });
     return;
   }
@@ -385,45 +508,55 @@ const server = http.createServer(async (req, res) => {
       pathname === "/api/live-signature/clear" ||
       pathname === "/api/signatures");
 
-  if (isSigningRequest && !isSignerAuthorized(req)) {
+  if (isSigningRequest && !isSigner(req, url)) {
     json(res, 403, { ok: false, error: "forbidden: missing or wrong X-Sign-Token" });
     return;
   }
 
   if (req.method === "GET" && pathname === "/events") {
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-store",
-      "Connection": "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
-    res.write("retry: 1000\n\n");
-    clients.add(res);
-    res.write(`event: state\n`);
-    res.write(`data: ${JSON.stringify(currentState())}\n\n`);
-    req.on("close", () => clients.delete(res));
+    openEventStream(req, res, url);
     return;
   }
 
   if (req.method === "GET" && pathname === "/api/state") {
-    json(res, 200, currentState());
+    json(res, 200, displayState());
     return;
   }
 
   if (req.method === "GET" && pathname === "/api/signatures") {
-    json(res, 200, { ok: true, signatures, signatureCount: signatures.length });
+    json(res, 200, { ok: true, signatures, signatureCount: signatures.length, signaturesVersion });
+    return;
+  }
+
+  // Ready-to-share page links with the right token baked in, for the
+  // console's quick links (staff only: it reveals both tokens).
+  if (req.method === "GET" && pathname === "/api/links") {
+    const staffQuery = controlToken ? `?token=${encodeURIComponent(controlToken)}` : "";
+    const signQuery = signToken ? `?token=${encodeURIComponent(signToken)}` : "";
+    json(res, 200, {
+      ok: true,
+      links: {
+        wall: `/wall${staffQuery}`,
+        medicalWall: `/medical-wall${staffQuery}`,
+        curtain: `/curtain${staffQuery}`,
+        control: `/control${staffQuery}`,
+        sign: `/sign${signQuery}`
+      }
+    });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/live-signature") {
     try {
-      const payload = await readJson(req);
-      const signature = sanitizeSignature(payload);
-      if (!signature.meta.doctorName) {
-        signature.meta.doctorName = `醫師 ${String(signatures.length + 1).padStart(2, "0")}`;
+      const signature = sanitizeSignature(await readJson(req));
+      if (submittedIds.has(signature.id)) {
+        json(res, 409, { ok: false, error: "signature already submitted" });
+        return;
       }
+      if (!signature.meta.doctorName) signature.meta.doctorName = doctorLabel(nextDoctorNumber);
       clearReturnTimer();
       currentSignature = null;
+      activeSince = null;
       liveSignature = {
         ...signature,
         updatedAt: new Date().toISOString(),
@@ -433,9 +566,10 @@ const server = http.createServer(async (req, res) => {
         lighting.trigger("live", { reason: "pen-down" });
       }
       touchStatus("live_signing");
-      const state = currentState();
-      broadcast("signature:live", state);
-      json(res, 200, { ok: true, signatureId: signature.id, state });
+      // One frame per pen movement: send walls just the stroke being written,
+      // not the retained list, and answer the iPad with an ack only.
+      broadcast("signature:live", { status, sequence, liveSignature }, WALL_ROLES);
+      json(res, 200, { ok: true, signatureId: signature.id });
     } catch (error) {
       json(res, 400, { ok: false, error: error.message });
     }
@@ -448,33 +582,32 @@ const server = http.createServer(async (req, res) => {
       touchStatus("idle");
       lighting.trigger("idle", { reason: "live-clear" });
     }
-    const state = currentState();
-    broadcast("signature:live-clear", state);
-    json(res, 200, { ok: true, state });
+    broadcast("signature:live-clear", displayState());
+    json(res, 200, { ok: true });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/signatures") {
     try {
-      const payload = await readJson(req);
-      const signature = sanitizeSignature(payload);
-      if (!signature.meta.doctorName) {
-        signature.meta.doctorName = `醫師 ${String(signatures.length + 1).padStart(2, "0")}`;
+      const signature = sanitizeSignature(await readJson(req));
+      if (submittedIds.has(signature.id)) {
+        json(res, 200, { ok: true, signatureId: signature.id, duplicate: true });
+        return;
       }
-      liveSignature = null;
-      const existingIndex = signatures.findIndex((item) => item.id === signature.id);
-      if (existingIndex >= 0) signatures.splice(existingIndex, 1, signature);
-      else signatures.push(signature);
-      while (signatures.length > maxSignatures) signatures.shift();
-      lastSignature = signature;
-      currentSignature = signature;
-      touchStatus("signature_received");
-      lighting.trigger("final", { reason: "signature-submitted", durationMs: displayDurationMs });
-      store.save(signatures);
-      const state = currentState();
-      broadcast("signature:submitted", state);
-      scheduleReturnToIdle(signature.id);
-      json(res, 201, { ok: true, signatureId: signature.id, state });
+      if (signatures.length >= maxSignatures) {
+        console.warn(`[store] refused ${signature.id}: ${signatures.length}/${maxSignatures} signatures stored (MAX_SIGNATURES)`);
+        json(res, 409, { ok: false, error: `已達簽名上限 ${maxSignatures} 筆，請通知工作人員` });
+        return;
+      }
+      if (!signature.meta.doctorName) {
+        signature.meta.doctorName = doctorLabel(nextDoctorNumber);
+        nextDoctorNumber += 1;
+      }
+      submittedIds.add(signature.id);
+      signatures.push(signature);
+      signaturesChanged();
+      startDisplay(signature, "signature_received", "signature-submitted");
+      json(res, 201, { ok: true, signatureId: signature.id });
     } catch (error) {
       json(res, 400, { ok: false, error: error.message });
     }
@@ -482,81 +615,48 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && pathname === "/api/cue/reset") {
-    clearReturnTimer();
-    liveSignature = null;
-    currentSignature = null;
-    touchStatus("idle");
-    lighting.trigger("idle", { reason: "cue-reset" });
-    const state = currentState();
-    broadcast("cue:reset", state);
-    json(res, 200, { ok: true, state });
+    json(res, 200, { ok: true, state: stopShow("idle", "cue-reset", "cue:reset") });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/cue/replay") {
-    liveSignature = null;
-    lastSignature = signatures.at(-1) || lastSignature;
-    if (!lastSignature) {
+    const target = signatures.at(-1) || lastSignature;
+    if (!target) {
       json(res, 409, { ok: false, error: "no signature to replay" });
       return;
     }
-    currentSignature = lastSignature;
-    touchStatus("replay");
-    lighting.trigger("final", { reason: "cue-replay", durationMs: displayDurationMs });
-    const state = currentState();
-    broadcast("signature:submitted", state);
-    scheduleReturnToIdle(lastSignature.id);
-    json(res, 200, { ok: true, state });
+    startDisplay(target, "replay", "cue-replay");
+    json(res, 200, { ok: true, state: displayState() });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/cue/blackout") {
-    clearReturnTimer();
-    liveSignature = null;
-    currentSignature = null;
-    touchStatus("blackout");
-    lighting.trigger("blackout", { reason: "cue-blackout" });
-    const state = currentState();
-    broadcast("cue:blackout", state);
-    json(res, 200, { ok: true, state });
+    json(res, 200, { ok: true, state: stopShow("blackout", "cue-blackout", "cue:blackout") });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/cue/idle") {
-    clearReturnTimer();
-    liveSignature = null;
-    currentSignature = null;
-    touchStatus("idle");
-    lighting.trigger("idle", { reason: "cue-idle" });
-    const state = currentState();
-    broadcast("cue:idle", state);
-    json(res, 200, { ok: true, state });
+    json(res, 200, { ok: true, state: stopShow("idle", "cue-idle", "cue:idle") });
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/cue/clear-signatures") {
-    clearReturnTimer();
     // Wiping is irreversible from the UI, so snapshot to a backup file first.
     if (signatures.length > 0) {
       const backupPath = path.join(dataDir, `signatures-cleared-${Date.now()}.json`);
       try {
         mkdirSync(dataDir, { recursive: true });
-        await writeFile(backupPath, JSON.stringify({ savedAt: new Date().toISOString(), signatures }, null, 2), "utf8");
+        await writeFile(backupPath, JSON.stringify({ savedAt: new Date().toISOString(), nextDoctorNumber, signatures }, null, 2), "utf8");
         console.log(`[store] cleared ${signatures.length} signatures, backup: ${backupPath}`);
       } catch (error) {
         console.log(`[store] clear backup failed: ${error.message}`);
       }
     }
     signatures.length = 0;
-    liveSignature = null;
-    currentSignature = null;
     lastSignature = null;
-    touchStatus("idle");
-    lighting.trigger("idle", { reason: "clear-signatures" });
-    store.save(signatures);
-    const state = currentState();
-    broadcast("cue:clear-signatures", state);
-    json(res, 200, { ok: true, state });
+    nextDoctorNumber = 1;
+    signaturesChanged();
+    json(res, 200, { ok: true, state: stopShow("idle", "clear-signatures", "cue:clear-signatures") });
     return;
   }
 
@@ -572,17 +672,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     signatures.splice(index, 1);
+    signaturesChanged();
     if (lastSignature?.id === id) lastSignature = signatures.at(-1) || null;
     if (currentSignature?.id === id) {
-      clearReturnTimer();
-      currentSignature = null;
-      touchStatus("idle");
-      lighting.trigger("idle", { reason: "signature-removed" });
-    } else {
-      touch();
+      json(res, 200, { ok: true, state: stopShow("idle", "signature-removed", "signature:removed") });
+      return;
     }
-    store.save(signatures);
-    const state = currentState();
+    touch();
+    const state = displayState();
     broadcast("signature:removed", state);
     json(res, 200, { ok: true, state });
     return;
@@ -598,7 +695,7 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJson(req);
       const lightingState = lighting.configure(payload);
       await saveLightingConfig(lightingState.config);
-      broadcast("lighting:config", currentState());
+      broadcast("lighting:config", displayState());
       json(res, 200, { ok: true, lighting: lightingState });
     } catch (error) {
       json(res, 400, { ok: false, error: error.message });
@@ -625,15 +722,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type"
-    });
-    res.end();
-    return;
-  }
-
   await serveStatic(req, res, pathname);
 });
 
@@ -643,9 +731,12 @@ async function main() {
   if (!controlToken && !isLoopbackHost) {
     console.warn(
       allowUnsafeNoToken
-        ? `[security] CONTROL_TOKEN not set while bound to ${host}: control endpoints (blackout/clear/lighting) are OPEN to anyone on this network (ALLOW_UNSAFE_NO_CONTROL_TOKEN=1).`
-        : `[security] CONTROL_TOKEN not set while bound to ${host}: control endpoints will reject requests with 403 until CONTROL_TOKEN is set. Set ALLOW_UNSAFE_NO_CONTROL_TOKEN=1 to explicitly allow open control instead (not recommended for a real event).`
+        ? `[security] CONTROL_TOKEN not set while bound to ${host}: control endpoints and signature data are OPEN to anyone on this network (ALLOW_UNSAFE_NO_CONTROL_TOKEN=1).`
+        : `[security] CONTROL_TOKEN not set while bound to ${host}: /control and the walls will get 403 until CONTROL_TOKEN is set. Set ALLOW_UNSAFE_NO_CONTROL_TOKEN=1 to explicitly allow open access instead (not recommended for a real event).`
     );
+  }
+  if (!signToken && !isLoopbackHost) {
+    console.warn(`[security] SIGN_TOKEN not set while bound to ${host}: any device on this network can draw live on the wall. Set SIGN_TOKEN and open the iPads with the /sign link from /control.`);
   }
 
   server.listen(port, host, () => {
@@ -669,8 +760,9 @@ async function main() {
       const o = lightingState.config.osc;
       console.log(`  OSC -> ${o.host}:${o.port} ${o.address}`);
     }
+    if (lightingState.lastError) console.warn(`[lighting] ${lightingState.lastError}`);
     console.log(`Signatures restored: ${signatures.length} (${store.filePath})`);
-    if (controlToken) console.log(`Control token in effect (open /control?token=... once per browser tab).`);
+    if (controlToken) console.log("Control token in effect: open /control?token=... and use its Quick Links for the walls and iPads.");
   });
 }
 

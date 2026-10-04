@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>黑布簾投影</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body class="curtain-body">
+  <!-- Entrance black-curtain projection: logo / signature / Welcome on pure
+       black (black projects as no light). Idle shows logo + Welcome with the
+       signature slot kept empty; the doctor's signature is written live into
+       the slot, then glides to the centre and holds for the display window. -->
+  <main class="curtain-stage" id="curtainStage" aria-label="黑布簾投影">
+    <div class="curtain-column">
+      <img class="curtain-logo" src="/assets/nordberg-medical-logo-light.png" alt="Nordberg Medical">
+      <svg class="curtain-signature" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet" aria-label="醫師簽名">
+        <g id="curtainStrokes"></g>
+        <circle class="curtain-tip" id="curtainTip" r="7" style="display: none"></circle>
+      </svg>
+      <p class="curtain-welcome">Welcome</p>
+    </div>
+  </main>
+
+  <script type="module">
+    import { connectEvents, strokeToPath } from "/assets/shared.js";
+
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const VIEW_W = 1000;
+    const VIEW_H = 500;
+    // Matches the opacity transition on .curtain-signature in app.css.
+    const FADE_MS = 900;
+    // Small signatures are enlarged to fill the slot, but not without limit.
+    const MAX_FIT_SCALE = 2.4;
+
+    const stage = document.querySelector("#curtainStage");
+    const strokesGroup = document.querySelector("#curtainStrokes");
+    const tip = document.querySelector("#curtainTip");
+
+    // What the slot shows: "live:<id>" while writing, "final:<id>|<activeSince>"
+    // during the display window, "" when empty.
+    let shownKey = "";
+    let clearTimer = null;
+
+    function renderState(state) {
+      if (!state) return;
+      stage.classList.toggle("blackout", state.status === "blackout");
+      if (state.liveSignature) {
+        showLive(state.liveSignature);
+        return;
+      }
+      if (state.currentSignature) {
+        showFinal(state.currentSignature, `${state.currentSignature.id}|${state.activeSince}`);
+        return;
+      }
+      hideSignature();
+    }
+
+    // Live frames carry only the stroke being written.
+    function renderLiveFrame(frame) {
+      if (!frame?.liveSignature) return;
+      stage.classList.remove("blackout");
+      showLive(frame.liveSignature);
+    }
+
+    // While writing, the iPad canvas maps 1:1 onto the slot so strokes never
+    // jump around under the doctor's pen.
+    function showLive(signature) {
+      cancelClear();
+      if (shownKey !== `live:${signature.id}`) setFit("none", false);
+      shownKey = `live:${signature.id}`;
+      drawStrokes(signature);
+      const point = lastPoint(signature);
+      if (point) {
+        tip.setAttribute("cx", String(point.x * VIEW_W));
+        tip.setAttribute("cy", String(point.y * VIEW_H));
+        tip.style.display = "";
+      }
+      stage.classList.add("has-signature");
+    }
+
+    // Once submitted, the signature glides to the centre of the slot, scaled
+    // to fill it, wherever on the iPad it was written.
+    function showFinal(signature, key) {
+      cancelClear();
+      if (shownKey === `final:${key}`) return;
+      const continuingFromLive = shownKey === `live:${signature.id}`;
+      shownKey = `final:${key}`;
+      drawStrokes(signature);
+      tip.style.display = "none";
+      setFit(fitTransform(signature), continuingFromLive);
+      stage.classList.add("has-signature");
+    }
+
+    function hideSignature() {
+      if (!shownKey) return;
+      shownKey = "";
+      tip.style.display = "none";
+      stage.classList.remove("has-signature");
+      clearTimer = setTimeout(() => {
+        strokesGroup.replaceChildren();
+        setFit("none", false);
+        clearTimer = null;
+      }, FADE_MS);
+    }
+
+    function cancelClear() {
+      if (clearTimer) {
+        clearTimeout(clearTimer);
+        clearTimer = null;
+      }
+    }
+
+    function drawStrokes(signature) {
+      const paths = (signature.strokes || []).map((stroke) => {
+        const path = document.createElementNS(SVG_NS, "path");
+        // A single point (an i-dot) needs a zero-length segment to show its round cap.
+        const d = strokeToPath(stroke, VIEW_W, VIEW_H);
+        path.setAttribute("d", stroke.length === 1 ? `${d} l 0.01 0` : d);
+        return path;
+      });
+      strokesGroup.replaceChildren(...paths);
+    }
+
+    function fitTransform(signature) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const stroke of signature.strokes || []) {
+        for (const point of stroke) {
+          const x = point.x * VIEW_W;
+          const y = point.y * VIEW_H;
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+      if (!Number.isFinite(minX)) return "none";
+      const width = Math.max(maxX - minX, 1);
+      const height = Math.max(maxY - minY, 1);
+      const scale = Math.min((VIEW_W * 0.9) / width, (VIEW_H * 0.82) / height, MAX_FIT_SCALE);
+      const tx = VIEW_W / 2 - ((minX + maxX) / 2) * scale;
+      const ty = VIEW_H / 2 - ((minY + maxY) / 2) * scale;
+      return `translate(${tx}px, ${ty}px) scale(${scale})`;
+    }
+
+    function setFit(transform, animate) {
+      strokesGroup.style.transition = animate ? "" : "none";
+      strokesGroup.style.transform = transform;
+      if (!animate) void strokesGroup.getBoundingClientRect();
+    }
+
+    function lastPoint(signature) {
+      const strokes = signature?.strokes || [];
+      for (let i = strokes.length - 1; i >= 0; i -= 1) {
+        const stroke = strokes[i] || [];
+        if (stroke.length > 0) return stroke[stroke.length - 1];
+      }
+      return null;
+    }
+
+    connectEvents("wall", {
+      state: renderState,
+      "signature:live": renderLiveFrame,
+      "signature:live-clear": renderState,
+      "signature:submitted": renderState,
+      "signature:removed": renderState,
+      "cue:reset": renderState,
+      "cue:idle": renderState,
+      "cue:auto-idle": renderState,
+      "cue:blackout": renderState,
+      "cue:clear-signatures": renderState
+    });
+  </script>
+</body>
+</html>

@@ -297,6 +297,17 @@ code {
   font-weight: 800;
 }
 
+.signature-header-actions button.primary {
+  background: var(--dark);
+  color: #fff;
+}
+
+.sign-logo {
+  display: block;
+  height: clamp(26px, 3.4vw, 40px);
+  width: auto;
+}
+
 .signature-card h1,
 .wall-title h1 {
   margin: 0;
@@ -488,6 +499,8 @@ code {
   position: relative;
   width: min(96vw, 1720px);
   aspect-ratio: 2 / 1;
+  /* cqw units below scale with the LED itself, not the browser window. */
+  container-type: inline-size;
   --live-x: 50%;
   --live-y: 50%;
   overflow: hidden;
@@ -849,18 +862,30 @@ code {
   transform: translateY(6%);
 }
 
+/* Marquee: lanes 1-2 above and 3-4 below a centre band that holds the
+   brand logo (.medical-brand). Sized in cqw so the layout holds on any 2:1
+   output resolution. */
 .medical-led.mode-marquee .medical-retained {
-  inset: 4% -5% 4%;
+  inset: 3% -5% 3%;
   height: auto;
-  gap: clamp(14px, 2.1vw, 28px);
-  align-content: space-evenly;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  row-gap: 1.2cqw;
+  align-content: stretch;
   opacity: 1;
   visibility: visible;
   transform: none;
 }
 
+.medical-led.mode-marquee .medical-marquee-lane.lane-3 {
+  grid-row: 4;
+}
+
+.medical-led.mode-marquee .medical-marquee-lane.lane-4 {
+  grid-row: 5;
+}
+
 .medical-led.mode-marquee .medical-marquee-track {
-  gap: clamp(18px, 2vw, 34px);
+  gap: 1.6cqw;
   animation-duration: 40s;
 }
 
@@ -878,18 +903,48 @@ code {
 }
 
 .medical-led.mode-marquee .medical-retained-card {
-  flex-basis: clamp(420px, 34vw, 650px);
-  height: clamp(118px, 12.2vw, 178px);
-  grid-template-rows: clamp(28px, 2.6vw, 40px) 1fr;
-  padding: clamp(12px, 1.4vw, 20px) clamp(16px, 1.8vw, 26px);
+  flex-basis: 26cqw;
+  height: 7.6cqw;
+  grid-template-rows: 1.8cqw 1fr;
+  padding: 0.8cqw 1.2cqw;
 }
 
 .medical-led.mode-marquee .medical-retained-card span {
-  font-size: clamp(18px, 1.7vw, 26px);
+  font-size: 1.25cqw;
 }
 
 .medical-led.mode-marquee .medical-retained-card path {
   stroke-width: 15;
+}
+
+/* Client logo. Marquee: centred in the band between the lanes. Live/final:
+   smaller, under the signature (the arrival layer paints over it). */
+.medical-brand {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 6;
+  height: 8cqw;
+  width: auto;
+  transform: translate(-50%, -50%);
+  opacity: 0.94;
+  filter: drop-shadow(0 0 1.4cqw rgba(110, 236, 224, 0.28));
+  pointer-events: none;
+  transition: top 700ms ease, height 700ms ease, opacity 500ms ease;
+}
+
+.medical-led.mode-live .medical-brand,
+.medical-led.mode-final .medical-brand {
+  top: 89%;
+  height: 5.2cqw;
+}
+
+.medical-led.mode-live .medical-brand {
+  opacity: 0.5;
+}
+
+.medical-led.mode-blackout .medical-brand {
+  opacity: 0;
 }
 
 .medical-status {
@@ -904,6 +959,88 @@ code {
   font-size: 12px;
   backdrop-filter: blur(10px);
   display: none;
+}
+
+/* Black-curtain projection (/curtain): logo, signature, Welcome stacked on
+   pure black like the event mockup. Sized from the viewport height so it
+   matches whatever area the projector is mapped to. */
+.curtain-body {
+  margin: 0;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+  cursor: none;
+}
+
+.curtain-stage {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  transition: opacity 600ms ease;
+}
+
+.curtain-stage.blackout {
+  opacity: 0;
+}
+
+.curtain-column {
+  width: min(62vh, 92vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3.2vh;
+  transform: translateY(-3vh);
+}
+
+.curtain-logo {
+  display: block;
+  width: 58%;
+  height: auto;
+}
+
+.curtain-signature {
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  overflow: visible;
+  opacity: 0;
+  filter: drop-shadow(0 0 0.6vh rgba(255, 255, 255, 0.45));
+  transition: opacity 900ms ease;
+}
+
+.curtain-stage.has-signature .curtain-signature {
+  opacity: 1;
+}
+
+#curtainStrokes {
+  transform-box: view-box;
+  transform-origin: 0 0;
+  transition: transform 900ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.curtain-signature path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: max(2px, 0.36vh);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.curtain-tip {
+  fill: #fff;
+  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.9));
+}
+
+.curtain-welcome {
+  margin: 0;
+  font-family: "Baskerville", "Didot", "Garamond", "Times New Roman", serif;
+  font-size: 6.4vh;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.02em;
 }
 
 .control-main {
