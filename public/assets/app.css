@@ -17,6 +17,11 @@
   box-sizing: border-box;
 }
 
+/* Buttons get display:inline-flex from .nav; [hidden] must still hide them. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
@@ -1312,24 +1317,162 @@ code {
   }
 }
 
-.light-config {
+/* Lighting outputs editor (/control, public/assets/lighting-panel.js). */
+.light-panel {
+  grid-column: 1 / -1;
+}
+
+.light-outputs {
+  display: grid;
+  gap: 14px;
+  margin: 14px 0;
+}
+
+.light-output {
   display: grid;
   gap: 12px;
-  margin-bottom: 16px;
   padding: 14px;
   border: 1px solid rgba(21, 23, 28, 0.12);
   border-radius: 12px;
   background: rgba(21, 23, 28, 0.03);
 }
 
-.light-fieldset {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+.light-output-head {
+  display: flex;
+  align-items: center;
   gap: 10px;
 }
 
-.light-fieldset[hidden] {
-  display: none;
+.light-output-type {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--dark);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.light-output-name {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(21, 23, 28, 0.18);
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+.light-output-toggle {
+  white-space: nowrap;
+  font-size: 0.86rem;
+}
+
+.light-output-head button,
+.light-cue-row button {
+  padding: 6px 12px;
+  border: 1px solid var(--dark);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dark);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.light-cue-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.light-cues {
+  display: grid;
+  gap: 6px;
+}
+
+.light-cue-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1.2fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.light-cue-label {
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.light-cue-input {
+  padding: 7px 9px;
+  border: 1px solid rgba(21, 23, 28, 0.18);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.84rem;
+}
+
+.light-cue-preview {
+  overflow: hidden;
+  color: var(--green);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.light-cue-preview.bad,
+.light-output-problem,
+.light-output-error {
+  color: var(--red);
+}
+
+.light-output-problem,
+.light-output-error,
+.light-output-status {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.light-output-status {
+  color: var(--muted);
+}
+
+.light-dirty {
+  color: var(--red);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.light-json textarea {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid rgba(21, 23, 28, 0.18);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+}
+
+.light-fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .light-cue-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .light-cue-label,
+  .light-cue-preview {
+    grid-column: 1 / -1;
+  }
+}
+
+.light-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
 }
 
 .light-field {

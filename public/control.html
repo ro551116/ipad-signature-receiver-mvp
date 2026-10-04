@@ -53,6 +53,13 @@
                 <button type="button" class="secondary" data-copy="sign">複製連結</button>
               </div>
             </div>
+            <div class="quick-link-row">
+              <span>MIDI 橋接（在 server 這台電腦開）</span>
+              <div class="control-actions nav">
+                <button type="button" data-open="midiBridge">開啟</button>
+                <button type="button" class="secondary" data-copy="midiBridge">複製連結</button>
+              </div>
+            </div>
           </div>
           <p class="toast" id="linkToast"></p>
         </section>
@@ -75,79 +82,48 @@
             <div class="state-row"><span>Last Updated</span><strong id="stateUpdated">-</strong></div>
             <div class="state-row"><span>Connected Walls</span><strong id="stateClients">-</strong></div>
             <div class="state-row"><span>Connected iPads</span><strong id="stateSigners">-</strong></div>
+            <div class="state-row"><span>MIDI Bridges</span><strong id="stateMidiBridges">-</strong></div>
             <div class="state-row"><span>Stored Signatures</span><strong id="stateSignatureCount">-</strong></div>
             <div class="state-row"><span>Auto Return</span><strong id="stateDuration">-</strong></div>
             <div class="state-row"><span>Has Replay</span><strong id="stateReplay">-</strong></div>
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel light-panel" id="lightingPanel">
           <h2>Lighting</h2>
-          <p>簽名事件會自動觸發燈光 cue（live / final / idle / blackout）。選擇訊號種類後按「套用設定」，設定會存檔、重啟後保留。</p>
+          <p>送 cue 訊號給燈光控台（或 show control 軟體），燈怎麼亮由控台決定：落筆 → Live、簽完上牆 → Final、回待機 → Idle、牆面 Blackout → Blackout。可以同時開很多個輸出；每個 cue 一行，打字時右邊會即時顯示會送出什麼。改完按「儲存燈光設定」。</p>
 
-          <div class="light-config">
-            <label class="light-field">
-              <span>訊號種類</span>
-              <select id="lightMode">
-                <option value="log">Log（無輸出，只印 console）</option>
-                <option value="osc">OSC 觸發（送 cue 給控台 / TouchDesigner）</option>
-                <option value="artnet-trigger">Art-Net 觸發（cue 寫入觸發 channel）</option>
-                <option value="artnet-stream">Art-Net 效果串流（內建極光直推 PAR）</option>
-              </select>
-            </label>
+          <div class="light-outputs" id="lightOutputs"></div>
 
-            <div class="light-fieldset" data-mode-fields="osc">
-              <label class="light-field"><span>OSC Host</span><input id="oscHost" placeholder="127.0.0.1"></label>
-              <label class="light-field"><span>OSC Port</span><input id="oscPort" type="number" min="1" max="65535"></label>
-              <label class="light-field"><span>OSC Address</span><input id="oscAddress" placeholder="/signature-wall/cue"></label>
-            </div>
+          <div class="control-actions nav" id="lightAdd"></div>
 
-            <div class="light-fieldset" data-mode-fields="artnet-trigger artnet-stream">
-              <label class="light-field"><span>Art-Net Host</span><input id="artnetHost" placeholder="255.255.255.255"></label>
-              <label class="light-field"><span>Art-Net Port</span><input id="artnetPort" type="number" min="1" max="65535"></label>
-              <label class="light-field"><span>Universe</span><input id="artnetUniverse" type="number" min="0" max="32767"></label>
-            </div>
-
-            <div class="light-fieldset" data-mode-fields="artnet-trigger">
-              <label class="light-field"><span>觸發 Channel</span><input id="triggerChannel" type="number" min="1" max="512"></label>
-              <label class="light-field"><span>Idle 值</span><input id="triggerIdle" type="number" min="0" max="255"></label>
-              <label class="light-field"><span>Live 值</span><input id="triggerLive" type="number" min="0" max="255"></label>
-              <label class="light-field"><span>Final 值</span><input id="triggerFinal" type="number" min="0" max="255"></label>
-              <label class="light-field"><span>Blackout 值</span><input id="triggerBlackout" type="number" min="0" max="255"></label>
-            </div>
-
-            <div class="light-fieldset" data-mode-fields="artnet-stream">
-              <label class="light-field"><span>PAR 數量</span><input id="parCount" type="number" min="1" max="64"></label>
-              <label class="light-field"><span>起始 Channel</span><input id="dmxStart" type="number" min="1" max="512"></label>
-              <label class="light-field">
-                <span>Fixture Profile</span>
-                <select id="fixtureProfile">
-                  <option value="rgb">RGB（3ch）</option>
-                  <option value="drgb">Dimmer + RGB（4ch）</option>
-                </select>
-              </label>
-              <label class="light-field"><span>FPS</span><input id="streamFps" type="number" min="10" max="44"></label>
-            </div>
-
-            <div class="control-actions nav">
-              <button type="button" id="applyLightConfig">套用設定</button>
-            </div>
+          <div class="control-actions nav">
+            <button type="button" id="lightSave">儲存燈光設定</button>
+            <button type="button" class="secondary" id="lightRevert">還原</button>
+            <span class="light-dirty" id="lightDirty" hidden>有未儲存的修改（每個 cue 的「送出」要先儲存）</span>
           </div>
+          <p class="toast" id="lightToast"></p>
 
+          <h3>手動送 cue 到所有啟用的輸出</h3>
           <div class="control-actions nav">
             <button type="button" class="secondary" data-light-cue="live">Test Live</button>
             <button type="button" data-light-cue="final">Test Final</button>
             <button type="button" class="secondary" data-light-cue="idle">Test Idle</button>
             <button type="button" class="warn" data-light-cue="blackout">Test Blackout</button>
           </div>
-          <p class="toast" id="lightToast"></p>
           <div class="state-list">
-            <div class="state-row"><span>Signal Mode</span><strong id="lightModeText">-</strong></div>
-            <div class="state-row"><span>Current Cue</span><strong id="lightCue">-</strong></div>
-            <div class="state-row"><span>Target</span><strong id="lightTarget">-</strong></div>
-            <div class="state-row"><span>Packets Sent</span><strong id="lightPackets">-</strong></div>
-            <div class="state-row"><span>Last Error</span><strong id="lightError">-</strong></div>
+            <div class="state-row"><span>Current Cue</span><strong id="lightCurrentCue">-</strong></div>
           </div>
+
+          <details class="light-json">
+            <summary>進階：用 JSON 編輯全部設定（複製到別台電腦、一次改很多）</summary>
+            <textarea id="lightJson" spellcheck="false" rows="14"></textarea>
+            <div class="control-actions nav">
+              <button type="button" id="lightJsonApply">套用並儲存 JSON</button>
+              <button type="button" class="secondary" id="lightJsonCopy">複製</button>
+            </div>
+          </details>
+          <datalist id="midiPorts"></datalist>
         </section>
 
         <section class="panel">
@@ -172,6 +148,7 @@
   <script type="module">
     import { connectEvents, controlHeaders, formatTime, postCue, setDot, signatureToPath } from "/assets/shared.js";
     import { buildSignatureExport } from "/assets/export.js";
+    import { createLightingPanel } from "/assets/lighting-panel.js";
 
     const connectionDot = document.querySelector("#connectionDot");
     const connectionText = document.querySelector("#connectionText");
@@ -181,17 +158,11 @@
     const stateUpdated = document.querySelector("#stateUpdated");
     const stateClients = document.querySelector("#stateClients");
     const stateSigners = document.querySelector("#stateSigners");
+    const stateMidiBridges = document.querySelector("#stateMidiBridges");
     const stateSignatureCount = document.querySelector("#stateSignatureCount");
     const stateDuration = document.querySelector("#stateDuration");
     const stateReplay = document.querySelector("#stateReplay");
-    const lightToast = document.querySelector("#lightToast");
-    const lightModeText = document.querySelector("#lightModeText");
-    const lightCue = document.querySelector("#lightCue");
-    const lightTarget = document.querySelector("#lightTarget");
-    const lightPackets = document.querySelector("#lightPackets");
-    const lightError = document.querySelector("#lightError");
-    const lightModeSelect = document.querySelector("#lightMode");
-    let configDirty = false;
+    const lightingPanel = createLightingPanel({ root: document.querySelector("#lightingPanel"), headers: controlHeaders });
     const previewEmpty = document.querySelector("#previewEmpty");
     const previewSvg = document.querySelector("#previewSvg");
     const previewPath = document.querySelector("#previewPath");
@@ -304,139 +275,8 @@
       });
     }
 
-    for (const button of document.querySelectorAll("[data-light-cue]")) {
-      button.addEventListener("click", async () => {
-        try {
-          const response = await fetch("/api/lighting/cue", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...controlHeaders() },
-            body: JSON.stringify({ cue: button.dataset.lightCue })
-          });
-          const payload = await response.json();
-          if (!response.ok) throw new Error(payload.error || `request failed: ${response.status}`);
-          renderLighting(payload.lighting);
-          lightToast.textContent = `Sent lighting cue: ${button.dataset.lightCue}`;
-        } catch (error) {
-          lightToast.textContent = error.message;
-        }
-      });
-    }
-
-    const modeLabels = {
-      "log": "Log（無輸出）",
-      "osc": "OSC 觸發",
-      "artnet-trigger": "Art-Net 觸發",
-      "artnet-stream": "Art-Net 效果串流"
-    };
-
-    function syncModeFields() {
-      const mode = lightModeSelect.value;
-      for (const fieldset of document.querySelectorAll("[data-mode-fields]")) {
-        fieldset.hidden = !fieldset.dataset.modeFields.split(" ").includes(mode);
-      }
-    }
-    lightModeSelect.addEventListener("change", () => {
-      configDirty = true;
-      syncModeFields();
-    });
-    for (const input of document.querySelectorAll(".light-config input, .light-config select")) {
-      input.addEventListener("input", () => { configDirty = true; });
-    }
-
-    function fillConfigForm(lighting) {
-      // Don't clobber the form while the operator is editing.
-      if (configDirty || !lighting?.config) return;
-      const { osc, artnet } = lighting.config;
-      lightModeSelect.value = lighting.mode;
-      document.querySelector("#oscHost").value = osc.host;
-      document.querySelector("#oscPort").value = osc.port;
-      document.querySelector("#oscAddress").value = osc.address;
-      document.querySelector("#artnetHost").value = artnet.host;
-      document.querySelector("#artnetPort").value = artnet.port;
-      document.querySelector("#artnetUniverse").value = artnet.universe;
-      document.querySelector("#triggerChannel").value = artnet.triggerChannel;
-      document.querySelector("#triggerIdle").value = artnet.triggerValues.idle;
-      document.querySelector("#triggerLive").value = artnet.triggerValues.live;
-      document.querySelector("#triggerFinal").value = artnet.triggerValues.final;
-      document.querySelector("#triggerBlackout").value = artnet.triggerValues.blackout;
-      document.querySelector("#parCount").value = artnet.parCount;
-      document.querySelector("#dmxStart").value = artnet.dmxStart;
-      document.querySelector("#fixtureProfile").value = artnet.profile;
-      document.querySelector("#streamFps").value = artnet.fps;
-      syncModeFields();
-    }
-
-    // Empty inputs are skipped instead of becoming Number("") === 0, which
-    // would get clamped to a surprising minimum on the server.
-    function numOrUndef(selector) {
-      const value = document.querySelector(selector).value.trim();
-      return value === "" ? undefined : Number(value);
-    }
-
-    function strOrUndef(selector) {
-      const value = document.querySelector(selector).value.trim();
-      return value === "" ? undefined : value;
-    }
-
-    document.querySelector("#applyLightConfig").addEventListener("click", async () => {
-      const patch = {
-        mode: lightModeSelect.value,
-        osc: {
-          host: strOrUndef("#oscHost"),
-          port: numOrUndef("#oscPort"),
-          address: strOrUndef("#oscAddress")
-        },
-        artnet: {
-          host: strOrUndef("#artnetHost"),
-          port: numOrUndef("#artnetPort"),
-          universe: numOrUndef("#artnetUniverse"),
-          triggerChannel: numOrUndef("#triggerChannel"),
-          triggerValues: {
-            idle: numOrUndef("#triggerIdle"),
-            live: numOrUndef("#triggerLive"),
-            final: numOrUndef("#triggerFinal"),
-            blackout: numOrUndef("#triggerBlackout")
-          },
-          parCount: numOrUndef("#parCount"),
-          dmxStart: numOrUndef("#dmxStart"),
-          profile: document.querySelector("#fixtureProfile").value,
-          fps: numOrUndef("#streamFps")
-        }
-      };
-      try {
-        const response = await fetch("/api/lighting/config", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...controlHeaders() },
-          body: JSON.stringify(patch)
-        });
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || `request failed: ${response.status}`);
-        configDirty = false;
-        renderLighting(payload.lighting);
-        fillConfigForm(payload.lighting);
-        lightToast.textContent = `已套用：${modeLabels[payload.lighting.mode] || payload.lighting.mode}`;
-      } catch (error) {
-        lightToast.textContent = error.message;
-      }
-    });
-
     function renderLighting(lighting) {
-      if (!lighting) return;
-      lightModeText.textContent = modeLabels[lighting.mode] || lighting.mode;
-      lightCue.textContent = lighting.currentCue || "-";
-      const { osc, artnet } = lighting.config || {};
-      if (lighting.mode === "osc" && osc) {
-        lightTarget.textContent = `${osc.host}:${osc.port} ${osc.address}`;
-      } else if (lighting.mode === "artnet-trigger" && artnet) {
-        lightTarget.textContent = `${artnet.host}:${artnet.port} U${artnet.universe} ch${artnet.triggerChannel}`;
-      } else if (lighting.mode === "artnet-stream" && artnet) {
-        lightTarget.textContent = `${artnet.host}:${artnet.port} U${artnet.universe} (${artnet.parCount}x ${artnet.profile} @ ${artnet.fps}fps)`;
-      } else {
-        lightTarget.textContent = "console log";
-      }
-      lightPackets.textContent = String(lighting.packetsSent ?? 0);
-      lightError.textContent = lighting.lastError || "-";
-      fillConfigForm(lighting);
+      lightingPanel.update(lighting);
     }
 
     function renderState(state) {
@@ -471,6 +311,7 @@
       if (!counts) return;
       stateClients.textContent = String(counts.connectedDisplays ?? "-");
       stateSigners.textContent = String(counts.connectedSigners ?? "-");
+      stateMidiBridges.textContent = String(counts.connectedMidiBridges ?? "-");
     }
 
     // Broadcasts only carry the newest signatures; the full list is fetched
@@ -559,6 +400,7 @@
       "signature:removed": renderState,
       "signature:live-clear": renderState,
       "lighting:config": renderState,
+      "lighting:status": renderLighting,
       "cue:reset": renderState,
       "cue:idle": renderState,
       "cue:auto-idle": renderState,

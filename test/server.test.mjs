@@ -220,15 +220,3 @@ test("deleting another signature mid-display keeps the display start time", asyn
   assert.equal(after.currentSignature.id, "sig-on-screen");
   assert.equal(after.activeSince, shown.activeSince);
 });
-
-test("an Art-Net stream patch that overruns the 512-channel universe is rejected", async (t) => {
-  const base = await startServer(t);
-
-  const response = await call(base, "POST", "/api/lighting/config", {
-    token: CONTROL_TOKEN,
-    body: { mode: "artnet-stream", artnet: { dmxStart: 500, parCount: 10, profile: "rgb" } }
-  });
-
-  assert.equal(response.status, 400);
-  assert.equal((await staffState(base)).lighting.mode, "log");
-});

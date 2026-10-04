@@ -76,10 +76,10 @@ The previous animation direction explicitly avoided readable text and readable s
 
 ## Next Build Step
 
-Done since this note was written: persistent signature store, lighting bridge (OSC / Art-Net, see README), and the client logo (Nordberg Medical, for "The First Light" event) in the marquee centre band and under the final signature.
+Done since this note was written: persistent signature store, lighting console cue outputs (OSC, Art-Net, sACN, MIDI / MSC via the MIDI bridge page, UDP/TCP text, HTTP; see README), and the client logo (Nordberg Medical, for "The First Light" event) in the marquee centre band and under the final signature.
 
 Still open:
 
 1. Add a `privacyMode` option: `exact` vs `abstract`.
 2. Rework the rest of the visual layer against the actual main visual once provided.
-3. Add rehearsal checklist for actual venue network, display resolution, browser fullscreen mode, and the PAR control path.
+3. Add rehearsal checklist for actual venue network, display resolution, browser fullscreen mode, and the lighting-console cue mapping.

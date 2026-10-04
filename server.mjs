@@ -49,7 +49,8 @@ const signToken = process.env.SIGN_TOKEN || "";
 const STAFF_ROLES = new Set(["wall", "control"]);
 const WALL_ROLES = new Set(["wall"]);
 const CONTROL_ROLES = new Set(["control"]);
-const EVENT_ROLES = new Set(["wall", "control", "sign"]);
+const MIDI_ROLES = new Set(["midi"]);
+const EVENT_ROLES = new Set(["wall", "control", "sign", "midi"]);
 
 // EventSource cannot send headers, so the token may also arrive as ?token=.
 function presentedToken(req, url, header) {
@@ -131,10 +132,15 @@ async function saveLightingConfig(config) {
   }
 }
 
-const lighting = createLightingBridge({ initialConfig: loadLightingConfig() });
+// MIDI has no port on the server: cues go to the MIDI bridge page(s), which
+// play them through Web MIDI on the machine with the MIDI interface.
+const lighting = createLightingBridge({
+  initialConfig: loadLightingConfig(),
+  onMidi: (event) => broadcast("midi", event, MIDI_ROLES)
+});
 const store = createSignatureStore({ dataDir });
 
-const clients = new Map(); // SSE response -> role (wall | control | sign)
+const clients = new Map(); // SSE response -> role (wall | control | sign | midi)
 const stored = store.load();
 const signatures = stored.signatures;
 let nextDoctorNumber = stored.nextDoctorNumber;
@@ -187,7 +193,11 @@ function countClients(role) {
 }
 
 function connectionCounts() {
-  return { connectedDisplays: countClients("wall"), connectedSigners: countClients("sign") };
+  return {
+    connectedDisplays: countClients("wall"),
+    connectedSigners: countClients("sign"),
+    connectedMidiBridges: countClients("midi")
+  };
 }
 
 // What walls and the control console get. Only the newest signatures ride
@@ -212,11 +222,16 @@ function displayState() {
   };
 }
 
+// Returns how many clients the event went to.
 function broadcast(event, payload, roles = STAFF_ROLES) {
   const message = `event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`;
+  let reached = 0;
   for (const [res, role] of clients) {
-    if (roles.has(role)) res.write(message);
+    if (!roles.has(role)) continue;
+    res.write(message);
+    reached += 1;
   }
+  return reached;
 }
 
 const heartbeat = setInterval(() => {
@@ -264,7 +279,7 @@ function startDisplay(signature, nextStatus, reason) {
   currentSignature = signature;
   activeSince = Date.now();
   touchStatus(nextStatus);
-  lighting.trigger("final", { reason, durationMs: displayDurationMs });
+  lighting.trigger("final", { reason });
   broadcast("signature:submitted", displayState());
   scheduleReturnToIdle(signature.id);
 }
@@ -376,6 +391,7 @@ async function serveStatic(req, res, pathname) {
     ["/wall", "/wall.html"],
     ["/medical-wall", "/medical-wall.html"],
     ["/curtain", "/curtain.html"],
+    ["/midi-bridge", "/midi-bridge.html"],
     ["/control", "/control.html"]
   ]);
 
@@ -465,7 +481,7 @@ function openEventStream(req, res, url) {
   });
   res.write("retry: 1000\n\n");
   clients.set(res, role);
-  if (role === "sign") res.write(`event: hello\ndata: ${JSON.stringify({ role })}\n\n`);
+  if (role === "sign" || role === "midi") res.write(`event: hello\ndata: ${JSON.stringify({ role })}\n\n`);
   else res.write(`event: state\ndata: ${JSON.stringify(displayState())}\n\n`);
   broadcast("clients", connectionCounts(), CONTROL_ROLES);
 
@@ -484,13 +500,12 @@ const server = http.createServer(async (req, res) => {
   const isControlRequest =
     (req.method === "POST" && (
       pathname.startsWith("/api/cue/") ||
-      pathname === "/api/lighting/config" ||
-      pathname === "/api/lighting/cue"
+      pathname.startsWith("/api/lighting/")
     )) ||
     (req.method === "DELETE" && pathname.startsWith("/api/signatures/"));
   const isStaffRead =
     req.method === "GET" &&
-    (pathname === "/api/state" || pathname === "/api/signatures" || pathname === "/api/links");
+    (pathname === "/api/state" || pathname === "/api/signatures" || pathname === "/api/links" || pathname === "/api/lighting");
 
   if ((isControlRequest || isStaffRead) && !isStaff(req, url)) {
     json(res, 403, { ok: false, error: "forbidden: missing or wrong X-Control-Token" });
@@ -498,7 +513,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   // Control actions are destructive or show-affecting: always leave a trace.
-  if (isControlRequest) {
+  // (The MIDI bridge's own port/result reports are routine, not operator actions.)
+  if (isControlRequest && !pathname.startsWith("/api/lighting/midi-")) {
     console.log(`[control] ${new Date().toISOString()} ${req.method} ${pathname} from ${req.socket.remoteAddress}`);
   }
 
@@ -539,6 +555,8 @@ const server = http.createServer(async (req, res) => {
         wall: `/wall${staffQuery}`,
         medicalWall: `/medical-wall${staffQuery}`,
         curtain: `/curtain${staffQuery}`,
+        // Web MIDI needs a secure context: http://localhost on the server itself.
+        midiBridge: `http://localhost:${server.address().port}/midi-bridge${staffQuery}`,
         control: `/control${staffQuery}`,
         sign: `/sign${signQuery}`
       }
@@ -690,6 +708,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Body: { outputs: [...] } — the whole output list, as edited in /control.
   if (req.method === "POST" && pathname === "/api/lighting/config") {
     try {
       const payload = await readJson(req);
@@ -703,6 +722,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Body: { cue, outputId? } — fire a cue now (all outputs, or just one).
   if (req.method === "POST" && pathname === "/api/lighting/cue") {
     try {
       const payload = await readJson(req);
@@ -711,11 +731,35 @@ const server = http.createServer(async (req, res) => {
         json(res, 400, { ok: false, error: `cue must be one of: ${lighting.cues.join(", ")}` });
         return;
       }
-      const lightingState = lighting.trigger(cue, {
-        reason: "manual-test",
-        durationMs: cue === "final" ? displayDurationMs : 0
-      });
+      const outputId = payload.outputId ? String(payload.outputId) : undefined;
+      const lightingState = lighting.trigger(cue, { reason: "manual-test", outputId });
       json(res, 200, { ok: true, lighting: lightingState });
+    } catch (error) {
+      json(res, 400, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  // From the MIDI bridge page: the MIDI output ports it can see.
+  if (req.method === "POST" && pathname === "/api/lighting/midi-ports") {
+    try {
+      const payload = await readJson(req);
+      lighting.setMidiPorts(payload.ports);
+      broadcast("lighting:status", lighting.state(), CONTROL_ROLES);
+      json(res, 200, { ok: true });
+    } catch (error) {
+      json(res, 400, { ok: false, error: error.message });
+    }
+    return;
+  }
+
+  // From the MIDI bridge page: whether a cue's MIDI actually went out.
+  if (req.method === "POST" && pathname === "/api/lighting/midi-result") {
+    try {
+      const payload = await readJson(req);
+      lighting.recordMidiResult(String(payload.outputId || ""), { ok: Boolean(payload.ok), error: payload.error });
+      broadcast("lighting:status", lighting.state(), CONTROL_ROLES);
+      json(res, 200, { ok: true });
     } catch (error) {
       json(res, 400, { ok: false, error: error.message });
     }
@@ -748,19 +792,11 @@ async function main() {
     console.log("Open from iPad on the same Wi-Fi:");
     for (const url of urls) console.log(`  ${url}`);
     const lightingState = lighting.state();
-    console.log(`Lighting signal mode: ${lightingState.mode}`);
-    if (lightingState.mode.startsWith("artnet")) {
-      const a = lightingState.config.artnet;
-      console.log(`  Art-Net -> ${a.host}:${a.port} universe ${a.universe}` +
-        (lightingState.mode === "artnet-trigger"
-          ? ` trigger ch${a.triggerChannel} (idle:${a.triggerValues.idle} live:${a.triggerValues.live} final:${a.triggerValues.final} blackout:${a.triggerValues.blackout})`
-          : ` (${a.parCount}x ${a.profile} PAR @ ${a.fps}fps)`));
+    const enabledOutputs = lightingState.config.outputs.filter((output) => output.enabled);
+    console.log(`Lighting console outputs: ${enabledOutputs.length ? enabledOutputs.map((output) => `${output.name} (${output.type})`).join(", ") : "none enabled"}`);
+    for (const output of lightingState.outputs) {
+      if (output.lastError) console.warn(`[lighting] ${output.id}: ${output.lastError}`);
     }
-    if (lightingState.mode === "osc") {
-      const o = lightingState.config.osc;
-      console.log(`  OSC -> ${o.host}:${o.port} ${o.address}`);
-    }
-    if (lightingState.lastError) console.warn(`[lighting] ${lightingState.lastError}`);
     console.log(`Signatures restored: ${signatures.length} (${store.filePath})`);
     if (controlToken) console.log("Control token in effect: open /control?token=... and use its Quick Links for the walls and iPads.");
   });
@@ -773,7 +809,7 @@ async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
   await store.flushNow();
-  lighting.close();
+  await lighting.close();
   process.exit(0);
 }
 process.on("SIGINT", shutdown);

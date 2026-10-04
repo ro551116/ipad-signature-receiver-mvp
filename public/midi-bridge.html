@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MIDI 橋接</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <!-- The server has no MIDI port of its own: this page receives MIDI cues
+       from it and plays them through Web MIDI on this machine's MIDI
+       interface. Keep it open in Chrome/Edge on the server computer
+       (http://localhost — Web MIDI needs a secure context). -->
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <strong>MIDI 橋接</strong>
+        <span>把燈光 cue 的 MIDI / MSC 訊息從這台電腦的 MIDI 介面送出。這頁要一直開著。</span>
+      </div>
+      <div class="status-pill">
+        <span class="status-dot" id="connectionDot"></span>
+        <span id="connectionText">連線中</span>
+      </div>
+    </header>
+
+    <main class="control-main">
+      <div class="control-grid">
+        <section class="panel">
+          <h2>MIDI 輸出埠</h2>
+          <p class="toast" id="midiStatus">正在取得 MIDI 權限…</p>
+          <div class="control-actions nav">
+            <button type="button" id="retryButton" hidden>重新要求 MIDI 權限</button>
+          </div>
+          <div class="state-list" id="portList"></div>
+          <p class="helper-text">控制台 MIDI 輸出的「MIDI 輸出埠」填這裡列出的名稱（填一部分即可）；空白就用第一個。</p>
+        </section>
+
+        <section class="panel">
+          <h2>最近送出</h2>
+          <div class="state-list" id="sendLog"><p class="helper-text">還沒有送出。</p></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script type="module">
+    import { connectEvents, controlHeaders, setDot, formatTime } from "/assets/shared.js";
+
+    const midiStatus = document.querySelector("#midiStatus");
+    const retryButton = document.querySelector("#retryButton");
+    const portList = document.querySelector("#portList");
+    const sendLog = document.querySelector("#sendLog");
+    const connectionDot = document.querySelector("#connectionDot");
+    const connectionText = document.querySelector("#connectionText");
+    const logEntries = [];
+    let access = null;
+
+    async function post(path, body) {
+      try {
+        await fetch(path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...controlHeaders() },
+          body: JSON.stringify(body)
+        });
+      } catch {
+        // The server may be restarting; the next cue reports again.
+      }
+    }
+
+    function outputs() {
+      return access ? [...access.outputs.values()].filter((port) => port.state !== "disconnected") : [];
+    }
+
+    function renderPorts() {
+      portList.replaceChildren();
+      const ports = outputs();
+      if (ports.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "helper-text";
+        empty.textContent = access ? "沒有偵測到 MIDI 輸出埠。插上 MIDI 介面，或在「音訊 MIDI 設定」開 IAC / 網路 MIDI。" : "尚未取得 MIDI 權限。";
+        portList.append(empty);
+      }
+      for (const port of ports) {
+        const row = document.createElement("div");
+        row.className = "state-row";
+        const name = document.createElement("span");
+        name.textContent = port.name;
+        const detail = document.createElement("strong");
+        detail.textContent = port.manufacturer || port.state;
+        row.append(name, detail);
+        portList.append(row);
+      }
+      post("/api/lighting/midi-ports", { ports: ports.map((port) => port.name) });
+    }
+
+    async function requestAccess() {
+      retryButton.hidden = true;
+      if (!window.isSecureContext) {
+        midiStatus.textContent = "這頁要用 http://localhost 開（在 server 這台電腦上）：瀏覽器只在安全環境開放 Web MIDI。";
+        return;
+      }
+      if (!navigator.requestMIDIAccess) {
+        midiStatus.textContent = "這個瀏覽器不支援 Web MIDI，請用 Chrome 或 Edge。";
+        return;
+      }
+      try {
+        // SysEx is needed for MIDI Show Control (MSC) messages.
+        access = await navigator.requestMIDIAccess({ sysex: true });
+        midiStatus.textContent = "MIDI 已啟用（含 SysEx / MSC）。";
+      } catch {
+        try {
+          access = await navigator.requestMIDIAccess();
+          midiStatus.textContent = "MIDI 已啟用，但沒有 SysEx 權限：MSC 與 F0 開頭的訊息送不出去。";
+        } catch (error) {
+          midiStatus.textContent = `沒有取得 MIDI 權限：${error.message}`;
+          retryButton.hidden = false;
+          return;
+        }
+      }
+      access.onstatechange = renderPorts;
+      renderPorts();
+    }
+
+    function pickPort(wanted) {
+      const ports = outputs();
+      if (!wanted) return ports[0] || null;
+      const needle = wanted.toLowerCase();
+      return ports.find((port) => port.name.toLowerCase().includes(needle)) || null;
+    }
+
+    function hex(bytes) {
+      return bytes.map((byte) => byte.toString(16).toUpperCase().padStart(2, "0")).join(" ");
+    }
+
+    function remember(entry) {
+      logEntries.unshift(entry);
+      logEntries.length = Math.min(logEntries.length, 20);
+      sendLog.replaceChildren(...logEntries.map(({ at, text, ok }) => {
+        const row = document.createElement("div");
+        row.className = "state-row";
+        const label = document.createElement("span");
+        label.textContent = `${formatTime(at)} ${text}`;
+        const result = document.createElement("strong");
+        result.textContent = ok ? "OK" : "失敗";
+        row.append(label, result);
+        return row;
+      }));
+    }
+
+    function playCue(event) {
+      if (!event) return;
+      const port = pickPort(event.port);
+      let error = "";
+      if (!access) error = "這台電腦還沒允許 MIDI";
+      else if (!port) error = event.port ? `找不到名稱包含「${event.port}」的 MIDI 輸出埠` : "沒有 MIDI 輸出埠";
+      else if (!access.sysexEnabled && event.messages.some((message) => message.bytes[0] === 0xf0)) error = "沒有 SysEx 權限，MSC 送不出去";
+      if (!error) {
+        try {
+          const now = performance.now();
+          for (const message of event.messages) port.send(message.bytes, now + message.delayMs);
+        } catch (sendError) {
+          error = sendError.message;
+        }
+      }
+      const text = `${event.cue} → ${port ? port.name : "-"}：${event.messages.map((message) => hex(message.bytes)).join(" | ")}`;
+      remember({ at: new Date().toISOString(), text: error ? `${text}（${error}）` : text, ok: !error });
+      post("/api/lighting/midi-result", { outputId: event.outputId, ok: !error, error });
+    }
+
+    retryButton.addEventListener("click", requestAccess);
+
+    connectEvents("midi", {
+      connection(connected) {
+        setDot(connectionDot, connected);
+        connectionText.textContent = connected ? "已連線到 server" : "連線中斷";
+        if (connected && access) renderPorts();
+      },
+      hello() {},
+      midi: playCue
+    });
+
+    requestAccess();
+  </script>
+</body>
+</html>

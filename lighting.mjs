@@ -1,71 +1,37 @@
-// Lighting cue bridge: maps signature-wall show events to lighting output.
-//
-// Signal modes (runtime switchable from /control or POST /api/lighting/config):
-//   log            - print cues to console only, no hardware needed
-//   osc            - one-shot OSC trigger message per cue
-//                    (lighting console / TouchDesigner / QLC+ runs the effect)
-//   artnet-trigger - set one DMX trigger channel to a per-cue value via Art-Net
-//                    (console listens to that channel and fires its own cue);
-//                    value is held with a low-rate keepalive stream
-//   artnet-stream  - built-in aurora effect engine, streams full DMX frames
-//                    directly to RGB PAR fixtures at LIGHT_FPS
+// Lighting console cue bridge: turns signature-wall show events into signals
+// a lighting console (or show-control software) maps to its own cues. The
+// console runs the looks; this only says which show state is active.
 //
 // Cues: idle | live | final | blackout
 //
-// Env gives the initial defaults; runtime config overrides and is persisted
-// by the server to data/lighting-config.json.
+// Any number of outputs can run at once, each with its own settings and one
+// line per cue (syntax and field definitions: public/assets/cue-syntax.js):
+//   osc    - OSC over UDP, or TCP with SLIP (OSC 1.1) or length-prefix (1.0)
+//   artnet - DMX levels over Art-Net (DMX remote / input triggers)
+//   sacn   - DMX levels over sACN / E1.31, multicast or unicast
+//   midi   - MIDI / MIDI Show Control bytes, played by the MIDI bridge page
+//            (Web MIDI) through onMidi; the server has no MIDI port itself
+//   text   - plain string commands over UDP or TCP
+//   http   - HTTP requests (e.g. Bitfocus Companion, console web APIs)
+// Action outputs fire once when a cue starts; Art-Net and sACN hold the
+// active cue's levels and re-send them every 250 ms.
+//
+// The config ({ outputs: [...] }) is edited in /control and persisted by the
+// server to data/lighting-config.json (plain JSON, also fine to edit by hand
+// while the server is stopped).
 
 import dgram from "node:dgram";
+import net from "node:net";
+import os from "node:os";
+import { randomBytes } from "node:crypto";
+import { CUES, OUTPUT_TYPES, normalizeConfig, validateOutput, parseCueLine } from "./public/assets/cue-syntax.js";
 
-export const SIGNAL_MODES = ["log", "osc", "artnet-trigger", "artnet-stream"];
-const CUES = ["idle", "live", "final", "blackout"];
+const KEEPALIVE_MS = 250;
+const SACN_PORT = 5568;
+const HTTP_TIMEOUT_MS = 3000;
+const SHUTDOWN_FLUSH_MS = 500;
 
-const FIXTURE_PROFILES = {
-  rgb: { channels: 3, hasDimmer: false },
-  drgb: { channels: 4, hasDimmer: true }
-};
-
-// Aurora palette stops used by the stream effect engine.
-const AURORA_PALETTE = [
-  { r: 8, g: 40, b: 60 },
-  { r: 10, g: 120, b: 90 },
-  { r: 40, g: 200, b: 140 },
-  { r: 90, g: 230, b: 210 }
-];
-
-const CUE_PROFILES = {
-  idle: { base: 0.22, wave: 0.1, speed: 0.35 },
-  live: { base: 0.4, wave: 0.18, speed: 0.8 },
-  final: { base: 0.55, wave: 0.45, speed: 1.6 },
-  blackout: { base: 0, wave: 0, speed: 0 }
-};
-
-function clamp(value, min, max) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return min;
-  return Math.min(max, Math.max(min, number));
-}
-
-function clamp01(value) {
-  return clamp(value, 0, 1);
-}
-
-function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
-
-function samplePalette(t) {
-  const scaled = clamp01(t) * (AURORA_PALETTE.length - 1);
-  const index = Math.min(AURORA_PALETTE.length - 2, Math.floor(scaled));
-  const local = scaled - index;
-  const from = AURORA_PALETTE[index];
-  const to = AURORA_PALETTE[index + 1];
-  return {
-    r: Math.round(lerp(from.r, to.r, local)),
-    g: Math.round(lerp(from.g, to.g, local)),
-    b: Math.round(lerp(from.b, to.b, local))
-  };
-}
+// ---- Encoders ------------------------------------------------------------------
 
 function oscString(value) {
   const text = Buffer.from(String(value), "utf8");
@@ -74,22 +40,42 @@ function oscString(value) {
   return padded;
 }
 
-function oscFloat(value) {
-  const buffer = Buffer.alloc(4);
-  buffer.writeFloatBE(Number(value) || 0);
-  return buffer;
+function oscMessage({ address, args }) {
+  const parts = [oscString(address), oscString(`,${args.map((arg) => arg.type).join("")}`)];
+  for (const arg of args) {
+    if (arg.type === "s") {
+      parts.push(oscString(arg.value));
+    } else {
+      const value = Buffer.alloc(4);
+      if (arg.type === "i") value.writeInt32BE(arg.value);
+      else value.writeFloatBE(arg.value);
+      parts.push(value);
+    }
+  }
+  return Buffer.concat(parts);
 }
 
-function buildOscMessage(address, cue, intensity) {
-  return Buffer.concat([
-    oscString(address),
-    oscString(",sf"),
-    oscString(cue),
-    oscFloat(intensity)
-  ]);
+// OSC 1.1 stream framing (SLIP, RFC 1055 with a leading END).
+function slip(packet) {
+  const END = 0xc0, ESC = 0xdb, ESC_END = 0xdc, ESC_ESC = 0xdd;
+  const bytes = [END];
+  for (const byte of packet) {
+    if (byte === END) bytes.push(ESC, ESC_END);
+    else if (byte === ESC) bytes.push(ESC, ESC_ESC);
+    else bytes.push(byte);
+  }
+  bytes.push(END);
+  return Buffer.from(bytes);
 }
 
-function buildArtDmxPacket(universe, dmxData) {
+// OSC 1.0 stream framing: int32 big-endian size before each packet.
+function lengthPrefixed(packet) {
+  const size = Buffer.alloc(4);
+  size.writeInt32BE(packet.length);
+  return Buffer.concat([size, packet]);
+}
+
+function artDmxPacket(universe, dmx) {
   const header = Buffer.alloc(18);
   header.write("Art-Net\0", 0, "ascii");
   header.writeUInt16LE(0x5000, 8); // OpDmx
@@ -97,259 +83,360 @@ function buildArtDmxPacket(universe, dmxData) {
   header.writeUInt8(0, 12); // sequence (0 = disabled)
   header.writeUInt8(0, 13); // physical port
   header.writeUInt16LE(universe & 0x7fff, 14);
-  header.writeUInt16BE(dmxData.length, 16);
-  return Buffer.concat([header, dmxData]);
+  header.writeUInt16BE(dmx.length, 16);
+  return Buffer.concat([header, dmx]);
 }
 
-function defaultConfig(env) {
-  const profileName = (env.LIGHT_FIXTURE_PROFILE || "rgb").toLowerCase();
-  return {
-    mode: SIGNAL_MODES.includes(env.LIGHT_MODE) ? env.LIGHT_MODE : "log",
-    osc: {
-      host: env.LIGHT_OSC_HOST || "127.0.0.1",
-      port: clamp(env.LIGHT_OSC_PORT || 8000, 1, 65535),
-      address: env.LIGHT_OSC_ADDRESS || "/signature-wall/cue"
-    },
-    artnet: {
-      host: env.LIGHT_ARTNET_HOST || "255.255.255.255",
-      port: clamp(env.LIGHT_ARTNET_PORT || 6454, 1, 65535),
-      universe: clamp(env.LIGHT_ARTNET_UNIVERSE || 0, 0, 32767),
-      parCount: clamp(env.LIGHT_PAR_COUNT || 4, 1, 64),
-      dmxStart: clamp(env.LIGHT_DMX_START || 1, 1, 512),
-      profile: FIXTURE_PROFILES[profileName] ? profileName : "rgb",
-      fps: clamp(env.LIGHT_FPS || 30, 10, 44),
-      triggerChannel: clamp(env.LIGHT_TRIGGER_CHANNEL || 1, 1, 512),
-      triggerValues: {
-        idle: clamp(env.LIGHT_TRIGGER_IDLE || 10, 0, 255),
-        live: clamp(env.LIGHT_TRIGGER_LIVE || 120, 0, 255),
-        final: clamp(env.LIGHT_TRIGGER_FINAL || 200, 0, 255),
-        blackout: clamp(env.LIGHT_TRIGGER_BLACKOUT || 0, 0, 255)
-      }
-    }
-  };
+// ANSI E1.31-2016 data packet with all 512 slots.
+function sacnPacket({ cid, sourceName, priority, sequence, universe, dmx }) {
+  const packet = Buffer.alloc(638);
+  packet.writeUInt16BE(0x0010, 0); // preamble size
+  packet.writeUInt16BE(0x0000, 2); // post-amble size
+  packet.write("ASC-E1.17\0\0\0", 4, "ascii");
+  packet.writeUInt16BE(0x7000 | (638 - 16), 16);
+  packet.writeUInt32BE(0x00000004, 18); // VECTOR_ROOT_E131_DATA
+  cid.copy(packet, 22);
+  packet.writeUInt16BE(0x7000 | (638 - 38), 38);
+  packet.writeUInt32BE(0x00000002, 40); // VECTOR_E131_DATA_PACKET
+  packet.write(sourceName.slice(0, 63), 44, "utf8");
+  packet.writeUInt8(priority, 108);
+  packet.writeUInt16BE(0, 109); // synchronization address
+  packet.writeUInt8(sequence, 111);
+  packet.writeUInt8(0, 112); // options
+  packet.writeUInt16BE(universe, 113);
+  packet.writeUInt16BE(0x7000 | (638 - 115), 115);
+  packet.writeUInt8(0x02, 117); // VECTOR_DMP_SET_PROPERTY
+  packet.writeUInt8(0xa1, 118); // address & data type
+  packet.writeUInt16BE(0x0000, 119); // first property address
+  packet.writeUInt16BE(0x0001, 121); // address increment
+  packet.writeUInt16BE(513, 123); // property value count (start code + 512)
+  packet.writeUInt8(0x00, 125); // DMX start code
+  dmx.copy(packet, 126, 0, Math.min(512, dmx.length));
+  return packet;
 }
 
-function mergeConfig(base, patch = {}) {
-  const next = structuredClone(base);
-  if (SIGNAL_MODES.includes(patch.mode)) next.mode = patch.mode;
-  if (patch.osc && typeof patch.osc === "object") {
-    if (patch.osc.host) next.osc.host = String(patch.osc.host).trim();
-    if (patch.osc.port !== undefined) next.osc.port = clamp(patch.osc.port, 1, 65535);
-    if (patch.osc.address) next.osc.address = String(patch.osc.address).trim();
-  }
-  if (patch.artnet && typeof patch.artnet === "object") {
-    const a = patch.artnet;
-    if (a.host) next.artnet.host = String(a.host).trim();
-    if (a.port !== undefined) next.artnet.port = clamp(a.port, 1, 65535);
-    if (a.universe !== undefined) next.artnet.universe = clamp(a.universe, 0, 32767);
-    if (a.parCount !== undefined) next.artnet.parCount = clamp(a.parCount, 1, 64);
-    if (a.dmxStart !== undefined) next.artnet.dmxStart = clamp(a.dmxStart, 1, 512);
-    if (a.profile && FIXTURE_PROFILES[a.profile]) next.artnet.profile = a.profile;
-    if (a.fps !== undefined) next.artnet.fps = clamp(a.fps, 10, 44);
-    if (a.triggerChannel !== undefined) next.artnet.triggerChannel = clamp(a.triggerChannel, 1, 512);
-    if (a.triggerValues && typeof a.triggerValues === "object") {
-      for (const cue of CUES) {
-        if (a.triggerValues[cue] !== undefined) {
-          next.artnet.triggerValues[cue] = clamp(a.triggerValues[cue], 0, 255);
-        }
-      }
-    }
-  }
-  return next;
+function sacnMulticastAddress(universe) {
+  return `239.255.${(universe >> 8) & 0xff}.${universe & 0xff}`;
 }
 
-// Stream mode writes parCount fixtures from dmxStart; anything past channel
-// 512 would silently fall off the universe, so refuse it instead.
-function dmxOverrun(config) {
-  if (config.mode !== "artnet-stream") return "";
-  const { dmxStart, parCount, profile } = config.artnet;
-  const channels = FIXTURE_PROFILES[profile].channels;
-  const lastChannel = dmxStart - 1 + parCount * channels;
-  if (lastChannel <= 512) return "";
-  return `DMX 超出 512 channel：起始 ${dmxStart} + ${parCount} 盞 × ${channels}ch，最後一個 channel 是 ${lastChannel}`;
-}
+// ---- Bridge ----------------------------------------------------------------------
 
 export function createLightingBridge(options = {}) {
-  const env = options.env || process.env;
   const log = options.log || ((...args) => console.log("[lighting]", ...args));
+  // Receives { outputId, port, cue, messages: [{ bytes, delayMs }] } and
+  // returns how many MIDI bridge pages it reached.
+  const onMidi = options.onMidi || (() => 0);
+  const cid = randomBytes(16);
+  const sourceName = `Signature Wall (${os.hostname()})`;
 
-  let config = mergeConfig(defaultConfig(env), options.initialConfig || {});
-  let socket = null;
-  let ticker = null;
+  let config = { outputs: [] };
+  let runtimes = new Map();
   let currentCue = "idle";
   let cueStartedAt = Date.now();
-  let cueDurationMs = 0;
-  let lastError = dmxOverrun(config);
-  let packetsSent = 0;
+  let midiPorts = [];
+  let ticker = null;
 
-  function ensureSocket() {
-    if (socket) return socket;
-    socket = dgram.createSocket("udp4");
+  function runtimeFor(output) {
+    let runtime = runtimes.get(output.id);
+    if (!runtime) {
+      runtime = { sent: 0, lastError: "", lastSentAt: null, cues: {}, configError: "", udp: null, tcp: null, tcpReady: false, tcpQueue: [], sequence: 0 };
+      runtimes.set(output.id, runtime);
+    }
+    return runtime;
+  }
+
+  function succeeded(runtime) {
+    runtime.sent += 1;
+    runtime.lastSentAt = new Date().toISOString();
+    if (!runtime.configError) runtime.lastError = "";
+  }
+
+  function failed(runtime, message) {
+    runtime.lastError = message;
+  }
+
+  function apply(nextConfig) {
+    closeTransports();
+    config = nextConfig;
+    const previous = runtimes;
+    runtimes = new Map();
+    for (const output of config.outputs) {
+      const runtime = runtimeFor(output);
+      const before = previous.get(output.id);
+      if (before) {
+        runtime.sent = before.sent;
+        runtime.lastSentAt = before.lastSentAt;
+      }
+      runtime.configError = validateOutput(output);
+      runtime.lastError = runtime.configError;
+      if (!runtime.configError) {
+        for (const cue of CUES) runtime.cues[cue] = parseCueLine(output, output.cues[cue]).commands;
+      }
+    }
+    restartTicker();
+    // Warm up TCP connections so the first cue is not delayed by a connect.
+    for (const output of activeOutputs()) {
+      if (usesTcp(output)) tcpConnection(output, runtimeFor(output));
+    }
+  }
+
+  function activeOutputs() {
+    return config.outputs.filter((output) => output.enabled && !runtimeFor(output).configError);
+  }
+
+  function usesTcp(output) {
+    return (output.type === "osc" && output.transport !== "udp") || (output.type === "text" && output.transport === "tcp");
+  }
+
+  // ---- Transports ----
+
+  function udpSocket(output, runtime) {
+    if (runtime.udp) return runtime.udp;
+    const socket = dgram.createSocket("udp4");
     socket.unref();
-    socket.on("error", (error) => {
-      lastError = error.message;
-    });
+    socket.on("error", (error) => failed(runtime, error.message));
     socket.bind(() => {
       try {
         socket.setBroadcast(true);
+        if (output.type === "sacn" && output.interfaceIp) socket.setMulticastInterface(output.interfaceIp);
       } catch (error) {
-        lastError = error.message;
+        failed(runtime, error.message);
       }
+    });
+    runtime.udp = socket;
+    return socket;
+  }
+
+  function sendUdp(output, runtime, buffer, port, host) {
+    return new Promise((resolve) => {
+      try {
+        udpSocket(output, runtime).send(buffer, port, host, (error) => {
+          if (error) failed(runtime, error.message);
+          else succeeded(runtime);
+          resolve();
+        });
+      } catch (error) {
+        failed(runtime, error.message);
+        resolve();
+      }
+    });
+  }
+
+  function tcpConnection(output, runtime) {
+    if (runtime.tcp) return runtime.tcp;
+    const socket = net.createConnection({ host: output.host, port: output.port });
+    socket.unref();
+    socket.setNoDelay(true);
+    socket.setKeepAlive(true, 5000);
+    runtime.tcp = socket;
+    runtime.tcpReady = false;
+    socket.on("connect", () => {
+      runtime.tcpReady = true;
+      const queued = runtime.tcpQueue;
+      runtime.tcpQueue = [];
+      for (const { buffer, resolve } of queued) writeTcp(runtime, buffer).then(resolve);
+    });
+    socket.on("data", () => {}); // consoles may answer; nothing to do with it
+    socket.on("error", (error) => failed(runtime, `TCP ${output.host}:${output.port} ${error.message}`));
+    socket.on("close", () => {
+      if (runtime.tcp === socket) {
+        runtime.tcp = null;
+        runtime.tcpReady = false;
+      }
+      // Anything still waiting for this connection is lost; say so.
+      for (const { resolve } of runtime.tcpQueue.splice(0)) resolve();
     });
     return socket;
   }
 
-  function sendUdp(buffer, port, host) {
-    try {
-      ensureSocket().send(buffer, port, host, (error) => {
-        if (error) lastError = error.message;
-        else packetsSent += 1;
+  function writeTcp(runtime, buffer) {
+    return new Promise((resolve) => {
+      runtime.tcp.write(buffer, (error) => {
+        if (error) failed(runtime, error.message);
+        else succeeded(runtime);
+        resolve();
       });
+    });
+  }
+
+  // Connects on demand (and again after a drop); a cue sent while connecting
+  // goes out as soon as the connection is up.
+  function sendTcp(output, runtime, buffer) {
+    tcpConnection(output, runtime);
+    if (runtime.tcpReady) return writeTcp(runtime, buffer);
+    return new Promise((resolve) => runtime.tcpQueue.push({ buffer, resolve }));
+  }
+
+  async function sendHttp(runtime, { method, url, body }) {
+    try {
+      const response = await fetch(url, {
+        method,
+        body: body && method !== "GET" ? body : undefined,
+        headers: body && method !== "GET" ? { "Content-Type": "text/plain; charset=utf-8" } : undefined,
+        signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
+      });
+      if (response.ok) succeeded(runtime);
+      else failed(runtime, `HTTP ${response.status} ${method} ${url}`);
     } catch (error) {
-      lastError = error.message;
+      failed(runtime, `${method} ${url}：${error.name === "TimeoutError" ? "逾時" : error.message}`);
     }
   }
 
-  // ---- Art-Net stream mode: aurora effect engine --------------------------
+  // ---- Per type ----
 
-  function renderStreamFrame(now) {
-    const cueProfile = CUE_PROFILES[currentCue] || CUE_PROFILES.idle;
-    const profile = FIXTURE_PROFILES[config.artnet.profile];
-    const elapsed = (now - cueStartedAt) / 1000;
-    const channelCount = config.artnet.dmxStart - 1 + config.artnet.parCount * profile.channels;
-    const dmx = Buffer.alloc(Math.min(512, Math.max(2, channelCount + (channelCount % 2))));
-
-    let envelope = 1;
-    if (currentCue === "final" && cueDurationMs > 0) {
-      const t = clamp01((now - cueStartedAt) / cueDurationMs);
-      if (t < 0.15) envelope = t / 0.15; // attack
-      else if (t > 0.75) envelope = clamp01((1 - t) / 0.25); // release
+  // Every channel any cue uses is 0 unless the active cue sets it.
+  function dmxFrame(runtime, length) {
+    const dmx = Buffer.alloc(length);
+    for (const { channels } of runtime.cues[currentCue]) {
+      for (const { channel, value } of channels) dmx[channel - 1] = value;
     }
-    if (currentCue === "blackout") envelope = 0;
+    return dmx;
+  }
 
-    for (let i = 0; i < config.artnet.parCount; i += 1) {
-      const phase = (i / config.artnet.parCount) * Math.PI * 2;
-      const wave = Math.sin(elapsed * cueProfile.speed * Math.PI + phase) * 0.5 + 0.5;
-      const intensity = clamp01(cueProfile.base + cueProfile.wave * wave) * envelope;
-      const color = samplePalette(0.35 + 0.65 * wave);
-      const offset = config.artnet.dmxStart - 1 + i * profile.channels;
+  function sendState(output) {
+    const runtime = runtimeFor(output);
+    if (output.type === "artnet") {
+      // ArtDmx carries channels 1..n with n even: cover the highest channel any cue uses.
+      let highest = 2;
+      for (const cue of CUES) for (const { channels } of runtime.cues[cue]) for (const { channel } of channels) highest = Math.max(highest, channel);
+      const dmx = dmxFrame(runtime, highest + (highest % 2));
+      return sendUdp(output, runtime, artDmxPacket(output.universe, dmx), output.port, output.host);
+    }
+    runtime.sequence = (runtime.sequence + 1) & 0xff;
+    const packet = sacnPacket({ cid, sourceName, priority: output.priority, sequence: runtime.sequence, universe: output.universe, dmx: dmxFrame(runtime, 512) });
+    return sendUdp(output, runtime, packet, SACN_PORT, output.host || sacnMulticastAddress(output.universe));
+  }
 
-      if (profile.hasDimmer) {
-        dmx[offset] = Math.round(intensity * 255);
-        dmx[offset + 1] = color.r;
-        dmx[offset + 2] = color.g;
-        dmx[offset + 3] = color.b;
-      } else {
-        dmx[offset] = Math.round(color.r * intensity);
-        dmx[offset + 1] = Math.round(color.g * intensity);
-        dmx[offset + 2] = Math.round(color.b * intensity);
+  function fireAction(output, cue) {
+    const runtime = runtimeFor(output);
+    const commands = runtime.cues[cue];
+    if (commands.length === 0) return Promise.resolve();
+    if (output.type === "midi") {
+      const reached = onMidi({ outputId: output.id, port: output.port, cue, messages: commands.flatMap((command) => command.messages) });
+      if (reached === 0) failed(runtime, "沒有 MIDI 橋接頁連線：在 server 這台電腦用 Chrome 開控制台的「MIDI 橋接」連結");
+      return Promise.resolve();
+    }
+    return Promise.all(commands.map((command) => {
+      if (output.type === "http") return sendHttp(runtime, command);
+      if (output.type === "osc") {
+        const packet = oscMessage(command);
+        if (output.transport === "udp") return sendUdp(output, runtime, packet, output.port, output.host);
+        return sendTcp(output, runtime, output.transport === "tcp-slip" ? slip(packet) : lengthPrefixed(packet));
       }
-    }
-
-    return dmx;
+      const ending = { none: "", cr: "\r", lf: "\n", crlf: "\r\n" }[output.lineEnding];
+      const buffer = Buffer.from(command.payload + ending, "latin1");
+      if (output.transport === "tcp") return sendTcp(output, runtime, buffer);
+      return sendUdp(output, runtime, buffer, output.port, output.host);
+    }));
   }
 
-  // ---- Art-Net trigger mode: hold one trigger channel value ---------------
-
-  function renderTriggerFrame() {
-    const channel = config.artnet.triggerChannel;
-    const value = config.artnet.triggerValues[currentCue] ?? 0;
-    const dmx = Buffer.alloc(Math.max(2, channel + (channel % 2)));
-    dmx[channel - 1] = value;
-    return dmx;
-  }
-
-  function tickerSettings() {
-    // Stream mode animates at full fps; trigger mode just holds the value
-    // with a low-rate keepalive so the Art-Net node never sees the line drop.
-    if (config.mode === "artnet-stream") {
-      return { interval: Math.round(1000 / config.artnet.fps), render: renderStreamFrame };
-    }
-    if (config.mode === "artnet-trigger") {
-      return { interval: 250, render: renderTriggerFrame };
-    }
-    return null;
+  function announce(output, cue) {
+    return OUTPUT_TYPES[output.type].kind === "state" ? sendState(output) : fireAction(output, cue);
   }
 
   function restartTicker() {
-    stopTicker();
-    const settings = tickerSettings();
-    if (!settings) return;
+    clearInterval(ticker);
+    ticker = null;
+    if (!config.outputs.some((output) => OUTPUT_TYPES[output.type].kind === "state")) return;
     ticker = setInterval(() => {
-      const packet = buildArtDmxPacket(config.artnet.universe, settings.render(Date.now()));
-      sendUdp(packet, config.artnet.port, config.artnet.host);
-    }, settings.interval);
+      for (const output of activeOutputs()) {
+        if (OUTPUT_TYPES[output.type].kind === "state") sendState(output);
+      }
+    }, KEEPALIVE_MS);
     ticker.unref();
   }
 
-  function stopTicker() {
-    if (ticker) {
-      clearInterval(ticker);
-      ticker = null;
+  function closeTransports() {
+    for (const runtime of runtimes.values()) {
+      runtime.udp?.close();
+      runtime.udp = null;
+      runtime.tcp?.destroy();
+      runtime.tcp = null;
+      runtime.tcpReady = false;
     }
   }
 
-  // ---- Public API ----------------------------------------------------------
+  // ---- Public API ----
 
+  // manual-test re-fires the cue even if it is already active; outputId
+  // limits the announcement to one output (state outputs always follow the
+  // current cue on their next keepalive).
   function trigger(cue, context = {}) {
     if (!CUES.includes(cue)) cue = "idle";
-    const previous = currentCue;
+    const changed = cue !== currentCue;
     currentCue = cue;
     cueStartedAt = Date.now();
-    cueDurationMs = Number(context.durationMs || 0);
-
-    if (previous !== cue || context.reason === "manual-test") {
-      log(`cue:${cue}`, `mode:${config.mode}`, context.reason ? `(${context.reason})` : "");
+    if (!changed && context.reason !== "manual-test") return state();
+    log(`cue:${cue}`, context.reason ? `(${context.reason})` : "", context.outputId ? `→ ${context.outputId}` : "");
+    for (const output of activeOutputs()) {
+      if (context.outputId && output.id !== context.outputId) continue;
+      announce(output, cue);
     }
-
-    if (config.mode === "osc") {
-      const intensity = CUE_PROFILES[cue].base + CUE_PROFILES[cue].wave;
-      const message = buildOscMessage(config.osc.address, cue, intensity);
-      sendUdp(message, config.osc.port, config.osc.host);
-    }
-
-    if (config.mode === "artnet-trigger") {
-      // Push the new value immediately, keepalive ticker holds it afterwards.
-      const packet = buildArtDmxPacket(config.artnet.universe, renderTriggerFrame());
-      sendUdp(packet, config.artnet.port, config.artnet.host);
-    }
-
     return state();
   }
 
-  function configure(patch) {
-    const next = mergeConfig(config, patch);
-    const overrun = dmxOverrun(next);
-    if (overrun) throw new Error(overrun);
-    config = next;
-    lastError = "";
-    restartTicker();
-    // Re-assert the current cue so the new target hears about it right away.
-    trigger(currentCue, { reason: "config-change", durationMs: cueDurationMs });
+  // Replaces the whole output list. Throws (and keeps the old config) if an
+  // output could not reach its console.
+  function configure(rawConfig) {
+    const next = normalizeConfig(rawConfig);
+    for (const output of next.outputs) {
+      const problem = validateOutput(output);
+      if (problem) throw new Error(`${output.name}：${problem}`);
+    }
+    apply(next);
+    // State outputs carry the cue, so new targets get it right away. Action
+    // outputs are not replayed on a settings change.
+    for (const output of activeOutputs()) {
+      if (OUTPUT_TYPES[output.type].kind === "state") sendState(output);
+    }
+    return state();
+  }
+
+  function setMidiPorts(ports) {
+    midiPorts = Array.isArray(ports) ? ports.map(String).slice(0, 64) : [];
+    return state();
+  }
+
+  function recordMidiResult(outputId, result = {}) {
+    const output = config.outputs.find((item) => item.id === outputId);
+    if (!output) return state();
+    const runtime = runtimeFor(output);
+    if (result.ok) succeeded(runtime);
+    else failed(runtime, String(result.error || "MIDI 送出失敗"));
     return state();
   }
 
   function state() {
     return {
-      mode: config.mode,
-      modes: SIGNAL_MODES,
       currentCue,
       cueStartedAt: new Date(cueStartedAt).toISOString(),
-      packetsSent,
-      lastError,
-      config
+      midiPorts,
+      config,
+      outputs: config.outputs.map((output) => {
+        const runtime = runtimeFor(output);
+        return { id: output.id, sent: runtime.sent, lastSentAt: runtime.lastSentAt, lastError: runtime.lastError };
+      })
     };
   }
 
-  function close() {
-    stopTicker();
-    if (socket) {
-      socket.close();
-      socket = null;
+  // Leaves every console on the idle cue before going quiet (consoles and
+  // DMX receivers hold the last thing they got).
+  async function close() {
+    clearInterval(ticker);
+    ticker = null;
+    if (currentCue !== "idle") {
+      currentCue = "idle";
+      cueStartedAt = Date.now();
+      log("cue:idle", "(shutdown)");
+      const sends = activeOutputs().map((output) => announce(output, "idle"));
+      await Promise.race([Promise.all(sends), new Promise((resolve) => setTimeout(resolve, SHUTDOWN_FLUSH_MS))]);
     }
+    closeTransports();
   }
 
-  restartTicker();
+  // A saved config that no longer validates is loaded but stays silent and
+  // shows its problem on the console page instead of failing startup.
+  apply(normalizeConfig(options.initialConfig));
 
-  return { trigger, configure, state, close, cues: CUES, modes: SIGNAL_MODES };
+  return { trigger, configure, state, close, setMidiPorts, recordMidiResult, cues: CUES };
 }
